@@ -1,0 +1,170 @@
+// 澶╂満闃?- 鍩虹鏁版嵁妯″瀷
+// Sprint 0: 浠呭缓琛紝鏃犱笟鍔￠€昏緫
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// 鏉冮檺琛?鈥?RBAC 鏈€灏忕矑搴?
+model Permission {
+  id          Int      @id @default(autoincrement())
+  action      String   // create / read / update / delete
+  resource    String   // task / store / user / requirement_type / system
+  description String?
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  @@unique([action, resource])
+  @@map("permissions")
+}
+
+/// 瑙掕壊琛?
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  users           User[]
+  rolePermissions RolePermission[]
+  @@map("roles")
+}
+
+/// 瑙掕壊-鏉冮檺 鍏宠仈琛?
+model RolePermission {
+  roleId       Int
+  permissionId Int
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// 鐢ㄦ埛琛?鈥?JWT 璁よ瘉涓讳綋
+model User {
+  id          Int      @id @default(autoincrement())
+  username    String   @unique
+  password    String   // bcrypt 鍝堝笇
+  displayName String
+  email       String   @default("")
+  roleId      Int
+  isActive    Boolean  @default(true)
+  mustChangePassword Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  role           Role             @relation(fields: [roleId], references: [id])
+  createdTasks   Task[]           @relation("TaskCreator")
+  assignedTasks  Task[]           @relation("TaskAssignee")
+
+  @@map("users")
+}
+
+/// 搴楅摵琛?
+model Store {
+  id          Int      @id @default(autoincrement())
+  name        String
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tasks Task[]
+
+  @@map("stores")
+}
+
+/// 闇€姹傜被鍨嬭〃
+model RequirementType {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requirementItems RequirementItem[]
+
+  @@map("requirement_types")
+}
+
+/// 娉曟棬琛紙浠诲姟锛?
+model Task {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  status      String   @default("PENDING") // PENDING | IN_PROGRESS | COMPLETED | CANCELLED
+  priority    String   @default("MEDIUM")  // LOW | MEDIUM | HIGH | URGENT
+  productCode String?
+  isUrgent    Boolean  @default(false)
+  creatorId   Int
+  assigneeId  Int?
+  storeId     Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  creator   User     @relation("TaskCreator", fields: [creatorId], references: [id])
+  assignee  User?    @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  store     Store?   @relation(fields: [storeId], references: [id])
+
+  requirementItems RequirementItem[]
+  attachments      Attachment[]
+
+  @@map("tasks")
+}
+
+/// 淇敼闇€姹傞」
+model RequirementItem {
+  id                Int      @id @default(autoincrement())
+  taskId            Int
+  requirementTypeId Int
+  content           String
+  status            String   @default("AWAITING_REVIEW")
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  task             Task             @relation(fields: [taskId], references: [id])
+  requirementType  RequirementType  @relation(fields: [requirementTypeId], references: [id])
+
+  @@map("requirement_items")
+}
+
+/// 闄勪欢琛?
+model Attachment {
+  id          Int      @id @default(autoincrement())
+  taskId      Int
+  fileName    String
+  filePath    String
+  fileSize    Int      @default(0)
+  mimeType    String   @default("application/octet-stream")
+  uploadedBy  Int
+  createdAt   DateTime @default(now())
+
+  task   Task @relation(fields: [taskId], references: [id])
+
+  @@map("attachments")
+}
+
+/// 通知表
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  content   String
+  type      String   @default("info") // info / warning / success / task_assigned
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}

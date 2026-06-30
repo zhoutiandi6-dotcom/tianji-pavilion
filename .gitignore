@@ -1,0 +1,16 @@
+﻿node_modules/
+dist/
+.next/
+*.db
+*.db-journal
+.env
+.env.local
+.DS_Store
+*.log
+coverage/
+seed.d.ts
+seed.d.ts.map
+seed.js
+seed.js.map
+*.pyc
+__pycache__/

@@ -1,0 +1,23 @@
+{
+  "name": "tianji-pavilion",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present --parallel",
+    "dev:server": "npm run dev -w @tianji/server",
+    "dev:web": "npm run dev -w @tianji/web",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "db:migrate": "npm run db:migrate -w @tianji/server",
+    "db:seed": "npm run db:seed -w @tianji/server",
+    "db:studio": "npm run prisma:studio -w @tianji/server"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}
