@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsInt, IsPositive } from "class-validator";
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsInt, IsOptional, IsPositive } from "class-validator";
 
 export class BatchAssignImageTasksDto {
   @IsArray()
@@ -10,4 +10,8 @@ export class BatchAssignImageTasksDto {
   @IsInt()
   @IsPositive()
   designerId!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  includeInWeeklyPlan?: boolean;
 }

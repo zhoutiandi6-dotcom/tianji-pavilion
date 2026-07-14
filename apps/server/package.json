@@ -14,6 +14,7 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "ts-node prisma/seed.ts",
     "audit:stage-a": "ts-node scripts/analyze-stage-a-backfill.ts",
+    "audit:stage-b": "ts-node scripts/analyze-stage-b-initialization.ts",
     "prisma:studio": "prisma studio",
     "test": "jest",
     "test:watch": "jest --watch",

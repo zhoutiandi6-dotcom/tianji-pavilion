@@ -24,6 +24,7 @@ import { WorkflowNotificationModule } from "./workflow-notification/workflow-not
 import { WorkflowHistoryModule } from "./workflow-history/workflow-history.module";
 import { AuditModule } from "./audit/audit.module";
 import { TimelineModule } from "./timeline/timeline.module";
+import { WeeklyPlansModule } from "./weekly-plans/weekly-plans.module";
 
 @Module({
   imports: [
@@ -37,7 +38,7 @@ import { TimelineModule } from "./timeline/timeline.module";
     EventBusModule, WorkflowEngineModule,
     AnnouncementModule, WorkflowNotificationModule,
     // RFC-008 modules
-    WorkflowHistoryModule, AuditModule, TimelineModule,
+    WorkflowHistoryModule, AuditModule, TimelineModule, WeeklyPlansModule,
   ],
 })
 export class AppModule implements NestModule {

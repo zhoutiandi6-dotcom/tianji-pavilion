@@ -15,6 +15,7 @@ import { UpdateImageTaskDto } from "./dto/update-image-task.dto";
 import { BatchAssignImageTasksDto } from "./dto/batch-assign-image-tasks.dto";
 import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
+import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 
 const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
 const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
@@ -27,6 +28,7 @@ export class ImageTasksService {
     private log: OperationLogService,
     private eventBus: EventBus,
     private workflowEngine: WorkflowEngine,
+    private weeklyPlans: WeeklyPlansService,
   ) {}
 
   async create(dto: CreateImageTaskDto, userId: number) {
@@ -128,7 +130,7 @@ export class ImageTasksService {
     if (imageTasks.some((item) => item.task.workflowStatus !== "OPS_APPROVED" || item.designerId || item.status !== "PENDING_ASSIGNMENT")) {
       throw new ForbiddenException("仅已通过运营审批且待分配的图片任务可批量分配");
     }
-    await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN");
+    const weeklyPlanResults = await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN", dto.includeInWeeklyPlan !== false);
     await this.log.log({
       userId,
       action: "batch_assign_designer",
@@ -137,7 +139,7 @@ export class ImageTasksService {
       content: `批量分配设计师：${imageTasks.length} 项`,
       afterValue: { designerId: Number(dto.designerId), imageTaskIds: ids },
     });
-    return { total: imageTasks.length, successCount: imageTasks.length, failedCount: 0, results: ids.map((id) => ({ id, success: true, message: "已分配" })) };
+    return { total: imageTasks.length, successCount: imageTasks.length, failedCount: 0, results: ids.map((id, index) => ({ id, success: true, message: "已分配", weeklyPlan: weeklyPlanResults[index] })) };
   }
 
   private async ensureDesigner(designerId: number) {
@@ -175,17 +177,28 @@ export class ImageTasksService {
     });
   }
 
-  private async assignImageTasks(imageTasks: any[], designerId: number, userId: number, mode: "ASSIGN" | "REASSIGN") {
+  private async assignImageTasks(
+    imageTasks: any[],
+    designerId: number,
+    userId: number,
+    mode: "ASSIGN" | "REASSIGN",
+    includeInWeeklyPlan = true,
+  ) {
     const assignedAt = new Date();
     const assignmentType = mode === "ASSIGN" ? "INITIAL" : "REASSIGN";
-    await this.prisma.$transaction(async (tx: any) => {
+    const weeklyPlanResults = await this.prisma.$transaction(async (tx: any) => {
+      const results: any[] = [];
       for (const item of imageTasks) {
         await tx.imageTask.update({
           where: { id: item.id },
           data: { designerId, assignedAt, assignedById: userId, status: "NOT_STARTED" },
         });
         await this.createAssignmentAudit(tx, item, designerId, userId, assignedAt, assignmentType);
+        results.push(await this.weeklyPlans.syncAssignmentInTransaction(
+          tx, item, designerId, userId, assignedAt, assignmentType, includeInWeeklyPlan,
+        ));
       }
+      return results;
     });
     for (const item of imageTasks) {
       await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(item.id, item.taskId, designerId));
@@ -198,6 +211,7 @@ export class ImageTasksService {
       });
     }
     await Promise.all([...new Set(imageTasks.map((item) => item.taskId))].map((taskId) => this.workflowEngine.recalcTaskStatus(taskId)));
+    return weeklyPlanResults;
   }
 
   async batchAssignTasks(dto: BatchAssignTasksDto, userId: number, userRole: string) {
@@ -212,9 +226,9 @@ export class ImageTasksService {
       ? item.status === "PENDING_ASSIGNMENT" && !item.designerId
       : item.status === "NOT_STARTED" && !!item.designerId));
     if (!imageTasks.length) throw new BadRequestException("所选法旨没有可处理的图片任务");
-    await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode);
+    const weeklyPlanResults = await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.includeInWeeklyPlan !== false);
     await this.log.log({ userId, action: "batch_assign_designer", targetType: "task", targetId: 0, content: `批量${dto.mode === "ASSIGN" ? "分配" : "改派"}设计师：${taskIds.length} 条法旨`, afterValue: { taskIds, designerId: dto.designerId, mode: dto.mode } });
-    return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
+    return { total: taskIds.length, successCount: taskIds.length, failedCount: 0, weeklyPlan: weeklyPlanResults };
   }
 
   async batchReviewTasks(dto: BatchReviewTasksDto, userId: number, userRole: string) {
@@ -244,6 +258,9 @@ export class ImageTasksService {
             approvedById: dto.action === "APPROVE" ? userId : null,
           },
         });
+        if (dto.action === "APPROVE" && approvedAt) {
+          await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, item.id, userId, approvedAt);
+        }
       }
     });
     for (const item of imageTasks) {
@@ -318,6 +335,7 @@ export class ImageTasksService {
       const data: any = {};
       let assignmentType: "INITIAL" | "REASSIGN" | null = null;
       let assignedAt: Date | null = null;
+      let approvedAt: Date | null = null;
       if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId) {
         await this.ensureDesigner(Number(dto.designerId));
         const assignable = imageTask.status === "PENDING_ASSIGNMENT" && !imageTask.designerId;
@@ -345,14 +363,22 @@ export class ImageTasksService {
         data.status = dto.status;
         data.reviewStatus = dto.status;
         data.reviewRemark = (dto.reviewRemark ?? dto.remark)?.trim() || imageTask.reviewRemark;
-        data.approvedAt = dto.status === "APPROVED" ? new Date() : null;
+        approvedAt = dto.status === "APPROVED" ? new Date() : null;
+        data.approvedAt = approvedAt;
         data.approvedById = dto.status === "APPROVED" ? userId : null;
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
+      let weeklyPlanResult: unknown = null;
       const result = await this.prisma.$transaction(async (tx: any) => {
         const updated = await tx.imageTask.update({ where: { id }, data });
         if (assignmentType && assignedAt && dto.designerId !== undefined) {
           await this.createAssignmentAudit(tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType);
+          weeklyPlanResult = await this.weeklyPlans.syncAssignmentInTransaction(
+            tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType, dto.includeInWeeklyPlan !== false,
+          );
+        }
+        if (data.status === "APPROVED" && approvedAt) {
+          await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, id, userId, approvedAt);
         }
         return updated;
       });
@@ -386,7 +412,7 @@ export class ImageTasksService {
           : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined);
         await this.eventBus.publish(event.name, event);
       }
-      return result;
+      return weeklyPlanResult ? { ...result, weeklyPlan: weeklyPlanResult } : result;
     }
 
     if (["OPERATION", "OWNER", "SUPER_ADMIN"].includes(userRole)) {

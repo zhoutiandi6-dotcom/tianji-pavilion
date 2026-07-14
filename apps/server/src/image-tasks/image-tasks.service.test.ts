@@ -6,6 +6,7 @@ describe("ImageTasksService stage A audit writes", () => {
   let log: any;
   let eventBus: any;
   let workflowEngine: any;
+  let weeklyPlans: any;
 
   const imageTask = (overrides: Record<string, any> = {}) => ({
     id: 1,
@@ -36,13 +37,17 @@ describe("ImageTasksService stage A audit writes", () => {
     log = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
     workflowEngine = { recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED") };
-    service = new ImageTasksService(prisma, log, eventBus, workflowEngine);
+    weeklyPlans = {
+      syncAssignmentInTransaction: jest.fn().mockResolvedValue({ state: "NO_PLAN" }),
+      completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "NO_ACTIVE_PLAN" }),
+    };
+    service = new ImageTasksService(prisma, log, eventBus, workflowEngine, weeklyPlans);
   });
 
   it("writes assignedAt and assignedById for a single initial assignment", async () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask());
 
-    await service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER");
+    const result = await service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER");
 
     expect(prisma.imageTask.update).toHaveBeenCalledWith({
       where: { id: 1 },
@@ -61,6 +66,16 @@ describe("ImageTasksService stage A audit writes", () => {
       assignedById: 9,
       assignmentType: "INITIAL",
     }));
+    expect(weeklyPlans.syncAssignmentInTransaction).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ id: 1 }),
+      7,
+      9,
+      expect.any(Date),
+      "INITIAL",
+      true,
+    );
+    expect(result).toEqual(expect.objectContaining({ weeklyPlan: { state: "NO_PLAN" } }));
   });
 
   it("writes assignment audit fields for every task in a batch", async () => {
@@ -121,6 +136,12 @@ describe("ImageTasksService stage A audit writes", () => {
         approvedById: 9,
       }),
     });
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).toHaveBeenCalledWith(
+      prisma,
+      1,
+      9,
+      expect.any(Date),
+    );
   });
 
   it("keeps final approval fields null when review is returned", async () => {

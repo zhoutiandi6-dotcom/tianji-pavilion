@@ -73,6 +73,11 @@ model User {
   submissionsMade     TaskSubmissionRecord[] @relation("TaskSubmissionSubmitter")
   submissionsWithdrawn TaskSubmissionRecord[] @relation("TaskSubmissionWithdrawnBy")
   submissionsProcessed TaskSubmissionRecord[] @relation("TaskSubmissionProcessedBy")
+  weeklyPlansCreated  WeeklyPlan[] @relation("WeeklyPlanCreatedBy")
+  weeklyPlansActivated WeeklyPlan[] @relation("WeeklyPlanActivatedBy")
+  weeklyPlansClosed   WeeklyPlan[] @relation("WeeklyPlanClosedBy")
+  weeklyPlanItemsAssigned WeeklyPlanItem[] @relation("WeeklyPlanItemDesigner")
+  weeklyPlanItemsCancelled WeeklyPlanItem[] @relation("WeeklyPlanItemCancelledBy")
   operationLogs       OperationLog[]
   uploadedAttachments Attachment[]
   announcements       Announcement[]
@@ -262,6 +267,7 @@ model ImageTask {
   assignedBy  User?        @relation("ImageTaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   approvedBy  User?        @relation("ImageTaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   attachments Attachment[]
+  weeklyPlanItems WeeklyPlanItem[]
 
   @@index([taskId])
   @@index([designerId])
@@ -272,6 +278,60 @@ model ImageTask {
   @@index([status])
   @@index([createdAt])
   @@map("image_tasks")
+}
+
+model WeeklyPlan {
+  id            Int       @id @default(autoincrement())
+  weekStart     DateTime  @unique
+  weekEnd       DateTime
+  status        String    @default("DRAFT")
+  createdById   Int
+  activatedAt   DateTime?
+  activatedById Int?
+  closedAt      DateTime?
+  closedById    Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  createdBy   User             @relation("WeeklyPlanCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  activatedBy User?            @relation("WeeklyPlanActivatedBy", fields: [activatedById], references: [id], onDelete: SetNull)
+  closedBy    User?            @relation("WeeklyPlanClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  items       WeeklyPlanItem[]
+
+  @@index([status])
+  @@index([weekEnd])
+  @@map("weekly_plans")
+}
+
+model WeeklyPlanItem {
+  id            Int       @id @default(autoincrement())
+  weeklyPlanId  Int
+  imageTaskId   Int
+  designerId    Int
+  source        String
+  status        String    @default("PLANNED")
+  plannedAt     DateTime  @default(now())
+  reassignedAt  DateTime?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  cancelledById Int?
+  cancelReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  weeklyPlan  WeeklyPlan @relation(fields: [weeklyPlanId], references: [id], onDelete: Cascade)
+  imageTask   ImageTask  @relation(fields: [imageTaskId], references: [id], onDelete: Restrict)
+  designer    User       @relation("WeeklyPlanItemDesigner", fields: [designerId], references: [id], onDelete: Restrict)
+  cancelledBy User?      @relation("WeeklyPlanItemCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  @@unique([weeklyPlanId, imageTaskId])
+  @@index([weeklyPlanId])
+  @@index([imageTaskId])
+  @@index([designerId])
+  @@index([source])
+  @@index([status])
+  @@index([completedAt])
+  @@map("weekly_plan_items")
 }
 
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲

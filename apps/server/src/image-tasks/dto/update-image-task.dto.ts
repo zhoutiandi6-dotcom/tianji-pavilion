@@ -10,6 +10,7 @@ export class UpdateImageTaskDto {
   @IsOptional() @IsBoolean() useUnifiedRequirement?: boolean;
   @IsOptional() @IsInt() inheritFromImageIndex?: number | null;
   @IsOptional() @IsInt() designerId?: number | null;
+  @IsOptional() @IsBoolean() includeInWeeklyPlan?: boolean;
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() remark?: string;
   @IsOptional() @IsString() completedAttachmentUrl?: string;
