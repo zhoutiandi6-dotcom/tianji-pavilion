@@ -1,0 +1,46 @@
+node_modules/
+dist/
+.next/
+build/
+coverage/
+out/
+
+# Runtime data and generated files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+apps/server/prisma/data/
+apps/server/uploads/
+uploads/*
+!uploads/.gitkeep
+prisma/data/*
+!prisma/data/.gitkeep
+
+# Secrets and local environment overrides
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs, temporary files, and local backups
+*.log
+*.err
+/logs/
+/temp/
+/tmp/
+/backup/
+*.tmp
+*.bak
+*.orig
+*.zip
+
+# Tool and operating-system files
+.cache/
+.turbo/
+*.tsbuildinfo
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

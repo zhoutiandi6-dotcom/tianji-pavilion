@@ -1,0 +1,421 @@
+// TianJi Pavilion - enterprise schema. OWNER is represented by role.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Permission & Role
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Permission {
+  id              Int              @id @default(autoincrement())
+  action          String
+  resource        String
+  description     String?
+  createdAt       DateTime         @default(now())
+  rolePermissions RolePermission[]
+
+  @@unique([action, resource])
+  @@map("permissions")
+}
+
+model Role {
+  id              Int              @id @default(autoincrement())
+  name            String           @unique
+  description     String?
+  createdAt       DateTime         @default(now())
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       Int
+  permissionId Int
+  createdAt    DateTime   @default(now())
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// User - 鐢ㄦ埛锛圡ilestone A: +Owner, +Lockout锛?// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model User {
+  id                 Int       @id @default(autoincrement())
+  username           String    @unique
+  password           String
+  displayName        String
+  email              String    @default("")
+  roleId             Int
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(false)
+  loginAttempts      Int       @default(0)
+  lockedUntil        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  role                Role             @relation(fields: [roleId], references: [id])
+  createdTasks        Task[]           @relation("TaskCreator")
+  imageTasks          ImageTask[]      @relation("ImageTaskDesigner")
+  approvalRecordsMade ApprovalRecord[]
+  operationLogs       OperationLog[]
+  uploadedAttachments Attachment[]
+  announcements       Announcement[]
+
+  @@index([roleId])
+  @@map("users")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Store - 搴楅摵
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Store {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  code        String    @unique
+  description String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById Int?
+
+  tasks Task[]
+
+  @@map("stores")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// RequirementType - 闇€姹傜被鍨?// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model RequirementType {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  description String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById Int?
+
+  tasks Task[]
+
+  @@map("requirement_types")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Task - 娉曟棬
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Task {
+  id                      Int       @id @default(autoincrement())
+  serialNumber            String    @unique
+  productCode             String?
+  productName             String?
+  storeId                 Int?
+  requirementTypeId       Int?
+  compatibleProduct       String?
+  requesterName           String?
+  operatorOwner           String?
+  submittedAt             DateTime?
+  deadline                DateTime?
+  imageCount              Int       @default(1)
+  imageSize               String?
+  usagePosition           String?
+  taskType                String?
+  overallRequirementType  String?
+  unifiedModificationNote String?
+  outputSpec              String?
+  materialLinks           String?
+  priority                String    @default("NORMAL")
+  workflowStatus          String    @default("DRAFT")
+  approverId              Int?
+  approvalComment         String?
+  approvedAt              String?
+  creatorId               Int
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  deletedAt               DateTime?
+  deletedById             Int?
+
+  creator         User             @relation("TaskCreator", fields: [creatorId], references: [id])
+  store           Store?           @relation(fields: [storeId], references: [id])
+  requirementType RequirementType? @relation(fields: [requirementTypeId], references: [id])
+  approvalRecords ApprovalRecord[]
+  imageTasks      ImageTask[]
+  attachments     Attachment[]
+
+  @@index([creatorId])
+  @@index([storeId])
+  @@index([requirementTypeId])
+  @@index([deadline])
+  @@index([workflowStatus])
+  @@index([createdAt])
+  @@map("tasks")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// ApprovalRecord - 瀹℃壒璁板綍
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model ApprovalRecord {
+  id         Int      @id @default(autoincrement())
+  taskId     Int
+  approverId Int
+  action     String
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  task     Task @relation(fields: [taskId], references: [id])
+  approver User @relation(fields: [approverId], references: [id])
+
+  @@index([taskId])
+  @@index([approverId])
+  @@map("approval_records")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// ImageTask - 鍥剧墖浠诲姟
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model ImageTask {
+  id                     Int       @id @default(autoincrement())
+  taskId                 Int
+  imageIndex             Int       @default(0)
+  imageTitle             String
+  imageType              String?
+  requirementType        String?
+  originalImageUrl       String?
+  referenceImageUrl      String?
+  requirement            String?
+  useUnifiedRequirement  Boolean   @default(true)
+  inheritFromImageIndex  Int?
+  designerId             Int?
+  status                 String    @default("WAITING_OPS_APPROVAL")
+  sortOrder              Int       @default(0)
+  remark                 String?
+  completedAttachmentUrl String?
+  designNote             String?
+  reviewStatus           String?
+  reviewRemark           String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  deletedAt              DateTime?
+  deletedById            Int?
+
+  task        Task         @relation(fields: [taskId], references: [id])
+  designer    User?        @relation("ImageTaskDesigner", fields: [designerId], references: [id])
+  attachments Attachment[]
+
+  @@index([taskId])
+  @@index([designerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("image_tasks")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Attachment - 闄勪欢
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Attachment {
+  id            Int       @id @default(autoincrement())
+  taskId        Int?
+  imageTaskId   Int?
+  category      String
+  fileName      String
+  fileType      String    @default("application/octet-stream")
+  mimeType      String    @default("application/octet-stream")
+  extension     String    @default("")
+  fileSize      Int       @default(0)
+  storagePath   String
+  previewPath   String?
+  thumbnailPath String?
+  uploadedById  Int
+  uploadedAt    DateTime  @default(now())
+  deletedAt     DateTime?
+  deletedById   Int?
+
+  task       Task?      @relation(fields: [taskId], references: [id])
+  imageTask  ImageTask? @relation(fields: [imageTaskId], references: [id])
+  uploadedBy User       @relation(fields: [uploadedById], references: [id])
+
+  @@index([taskId])
+  @@index([imageTaskId])
+  @@index([category])
+  @@index([uploadedById])
+  @@index([deletedAt])
+  @@map("attachments")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Notification - 閫氱煡
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Notification {
+  id          Int       @id @default(autoincrement())
+  senderId    Int
+  receiverId  Int
+  title       String
+  content     String
+  type        String    @default("info")
+  priority    String    @default("normal")
+  taskId      Int?
+  imageTaskId Int?
+  actionUrl   String?
+  metadata    String? // JSON
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([receiverId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// OperationLog - 鎿嶄綔鏃ュ織
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model OperationLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  action      String
+  targetType  String
+  targetId    Int?
+  module      String   @default("general")
+  content     String?
+  beforeValue String? // JSON
+  afterValue  String? // JSON
+  ipAddress   String?
+  userAgent   String?
+  requestId   String?
+  traceId     String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([targetType])
+  @@index([action])
+  @@map("operation_logs")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// SystemConfig - 绯荤粺璁剧疆锛圞ey-Value 鎸佷箙鍖栵級
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model SystemConfig {
+  id           Int      @id @default(autoincrement())
+  key          String   @unique
+  value        String   @default("")
+  version      Int      @default(1)
+  updatedBy    Int?
+  changeReason String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("system_configs")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// Announcement - 绯荤粺鍏憡
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model Announcement {
+  id          Int       @id @default(autoincrement())
+  title       String
+  content     String
+  priority    String    @default("normal")
+  isPublished Boolean   @default(false)
+  isPinned    Boolean   @default(false)
+  publishedAt DateTime?
+  creatorId   Int
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  creator User @relation(fields: [creatorId], references: [id])
+
+  @@index([creatorId])
+  @@index([isPublished])
+  @@index([deletedAt])
+  @@map("announcements")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// WorkflowHistory - 宸ヤ綔娴佸巻鍙诧紙涓嶅彲鍙橈級
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model WorkflowHistory {
+  id         Int      @id @default(autoincrement())
+  workflowId Int
+  eventType  String
+  fromState  String?
+  toState    String?
+  operatorId Int?
+  metadata   String? // JSON
+  createdAt  DateTime @default(now())
+
+  @@index([workflowId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("workflow_history")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// AuditEvent - 瀹¤浜嬩欢锛堜笉鍙彉锛屼簨浠堕┍鍔級
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model AuditEvent {
+  id            Int      @id @default(autoincrement())
+  resourceType  String
+  resourceId    Int
+  action        String
+  operatorId    Int?
+  correlationId String?
+  metadata      String? // JSON
+  createdAt     DateTime @default(now())
+
+  @@index([resourceType])
+  @@index([resourceId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_events")
+}
+
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+// PilotFeedback - 鍐呮祴鍙嶉
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+
+model PilotFeedback {
+  id          Int      @id @default(autoincrement())
+  userId      Int?
+  role        String
+  module      String
+  description String
+  severity    String   @default("normal")
+  suggestion  String?
+  status      String   @default("open")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("pilot_feedback")
+}
