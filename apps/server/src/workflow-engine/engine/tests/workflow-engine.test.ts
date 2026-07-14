@@ -1,8 +1,8 @@
 ﻿import { Test, TestingModule } from "@nestjs/testing";
-import { WorkflowEngine } from "./index";
-import { PrismaService } from "../../common/prisma.service";
-import { EventBus } from "../../event-bus/event-bus";
-import { OperationLogService } from "../../operation-log/operation-log.service";
+import { WorkflowEngine } from "../index";
+import { PrismaService } from "../../../common/prisma.service";
+import { EventBus } from "../../../event-bus/event-bus";
+import { OperationLogService } from "../../../operation-log/operation-log.service";
 
 describe("WorkflowEngine", () => {
   let engine: WorkflowEngine;
@@ -27,8 +27,10 @@ describe("WorkflowEngine", () => {
       },
       imageTask: {
         findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
+    prisma.$transaction = jest.fn().mockImplementation(async (callback) => callback(prisma));
 
     eventBus = {
       publish: jest.fn().mockResolvedValue(undefined),
@@ -48,7 +50,7 @@ describe("WorkflowEngine", () => {
 
   describe("submit", () => {
     it("allows OPERATION to submit", async () => {
-      const result = await engine.submit(1, 1, "OPERATION");
+      await engine.submit(1, 1, "OPERATION");
       expect(prisma.task.update).toHaveBeenCalled();
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.submitted", expect.any(Object));
     });
@@ -64,7 +66,8 @@ describe("WorkflowEngine", () => {
 
   describe("approve", () => {
     it("allows OPERATION_MANAGER to approve", async () => {
-      const result = await engine.approve(1, 1, "OPERATION_MANAGER");
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
+      await engine.approve(1, 1, "OPERATION_MANAGER");
       expect(prisma.approvalRecord.create).toHaveBeenCalled();
       expect(prisma.task.update).toHaveBeenCalled();
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.approved", expect.any(Object));
@@ -81,7 +84,8 @@ describe("WorkflowEngine", () => {
 
   describe("reject", () => {
     it("allows OPERATION_MANAGER to reject", async () => {
-      const result = await engine.reject(1, 1, "OPERATION_MANAGER", "需要修改");
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
+      await engine.reject(1, 1, "OPERATION_MANAGER", "需要修改");
       expect(prisma.approvalRecord.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ action: "OPS_REJECTED", comment: "需要修改" }),
@@ -94,7 +98,7 @@ describe("WorkflowEngine", () => {
   describe("withdraw", () => {
     it("allows OPERATION to withdraw their own task", async () => {
       prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
-      const result = await engine.withdraw(1, 1, "OPERATION");
+      await engine.withdraw(1, 1, "OPERATION");
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.withdrawn", expect.any(Object));
     });
 
@@ -111,15 +115,16 @@ describe("WorkflowEngine", () => {
       expect(status).toBe("OPS_APPROVED");
     });
 
-    it("returns COMPLETED when all image tasks completed", async () => {
+    it("returns DESIGN_APPROVED when all image tasks completed", async () => {
       prisma.imageTask.findMany.mockResolvedValue([
         { status: "COMPLETED" }, { status: "COMPLETED" },
       ]);
       const status = await engine.recalcTaskStatus(1);
-      expect(status).toBe("COMPLETED");
+      expect(status).toBe("DESIGN_APPROVED");
     });
 
     it("publishes workflow.completed when all tasks complete", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "OPS_APPROVED" });
       prisma.imageTask.findMany.mockResolvedValue([
         { status: "COMPLETED" }, { status: "COMPLETED" },
       ]);

@@ -58,12 +58,12 @@ describe("StateMachine", () => {
   });
 
   describe("calcTaskWorkflowStatus", () => {
-    it("all image tasks completed or approved = COMPLETED", () => {
-      expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "APPROVED"])).toBe("COMPLETED");
+    it("all image tasks completed or approved = DESIGN_APPROVED", () => {
+      expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "APPROVED"])).toBe("DESIGN_APPROVED");
     });
 
     it("any active design status = IN_DESIGN", () => {
-      expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "SUBMITTED_FOR_REVIEW"])).toBe("IN_DESIGN");
+      expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "SUBMITTED_FOR_REVIEW"])).toBe("DESIGN_REVIEW");
       expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "IN_PROGRESS"])).toBe("IN_DESIGN");
       expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "REVISION_REQUIRED"])).toBe("IN_DESIGN");
     });

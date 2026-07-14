@@ -15,7 +15,7 @@ const statusLabels: Record<string, string> = {
   DESIGN_ASSIGNED: "已分配设计",
   IN_DESIGN: "设计中",
   DESIGN_REVIEW: "待设计审核",
-  DESIGN_APPROVED: "设计审核通过",
+  DESIGN_APPROVED: "已完成",
   COMPLETED: "已完成",
   CANCELLED: "已取消",
 };

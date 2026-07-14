@@ -66,17 +66,21 @@ const getMenuItems = (role: string) => {
     ];
   }
 
-  return [
-    ...common,
-    fazhiCenter,
-    { key: "/dashboard/stores", icon: <ShopOutlined />, label: "店铺管理" },
-    { key: "/dashboard/requirement-types", icon: <TagsOutlined />, label: "需求类型" },
-    { key: "/dashboard/users", icon: <TeamOutlined />, label: "用户管理" },
-    { key: "/dashboard/logs", icon: <SettingOutlined />, label: "操作日志" },
-    notifications,
-    { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈管理" },
-    { key: "/dashboard/settings", icon: <SettingOutlined />, label: "系统设置" },
-  ];
+  if (["OWNER", "SUPER_ADMIN"].includes(role)) {
+    return [
+      ...common,
+      fazhiCenter,
+      { key: "/dashboard/stores", icon: <ShopOutlined />, label: "店铺管理" },
+      { key: "/dashboard/requirement-types", icon: <TagsOutlined />, label: "需求类型" },
+      { key: "/dashboard/users", icon: <TeamOutlined />, label: "用户管理" },
+      { key: "/dashboard/logs", icon: <SettingOutlined />, label: "操作日志" },
+      notifications,
+      { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈管理" },
+      { key: "/dashboard/settings", icon: <SettingOutlined />, label: "系统设置" },
+    ];
+  }
+
+  return common;
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

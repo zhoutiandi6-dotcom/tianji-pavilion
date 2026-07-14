@@ -1,8 +1,8 @@
 ﻿import { Test, TestingModule } from "@nestjs/testing";
 import { JwtService } from "@nestjs/jwt";
-import { AuthService } from "./auth.service";
-import { PrismaService } from "../common/prisma.service";
-import { OperationLogService } from "../operation-log/operation-log.service";
+import { AuthService } from "../auth.service";
+import { PrismaService } from "../../common/prisma.service";
+import { OperationLogService } from "../../operation-log/operation-log.service";
 
 describe("AuthService", () => {
   let service: AuthService;
@@ -76,7 +76,7 @@ describe("AuthService", () => {
   describe("login (failure paths)", () => {
     it("throws for inactive user", async () => {
       prisma.user.findUnique.mockResolvedValue({ ...mockUser, isActive: false });
-      await expect(service.login("admin", "admin123")).rejects.toThrow("账号或密码错误");
+      await expect(service.login("admin", "admin123")).rejects.toThrow("账号已停用");
     });
 
     it("throws for wrong password", async () => {

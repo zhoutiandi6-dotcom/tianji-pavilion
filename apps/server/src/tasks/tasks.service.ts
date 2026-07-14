@@ -40,7 +40,15 @@ export class TasksService {
     const scope = String(filters.scope || (filters.view === "archive" ? "archived" : "processing"));
     conditions.push(this.visibility.scopeWhere(scope, userRole, userId));
     if (filters.status) conditions.push({ workflowStatus: filters.status });
+    if (filters.statusGroup === "designflow") conditions.push({ workflowStatus: { in: DESIGN_VISIBLE_STATUSES } });
+    if (filters.approvalAction) {
+      conditions.push({ approvalRecords: { some: { approverId: userId, action: String(filters.approvalAction) } } });
+    }
     if (filters.imageStatus) conditions.push({ imageTasks: { some: { status: String(filters.imageStatus) } } });
+    const imageGroupStatuses = filters.imageGroup === "unfinished"
+      ? ["PENDING_ASSIGNMENT", "NOT_STARTED", "IN_PROGRESS", "SUBMITTED_FOR_REVIEW", "REVISION_REQUIRED"]
+      : undefined;
+    if (imageGroupStatuses) conditions.push({ imageTasks: { some: { status: { in: imageGroupStatuses } } } });
     if (filters.storeId) conditions.push({ storeId: Number(filters.storeId) });
     if (filters.requesterName) conditions.push({ requesterName: { contains: String(filters.requesterName) } });
     if (filters.priority) conditions.push({ priority: filters.priority });
@@ -53,7 +61,17 @@ export class TasksService {
     }
     const canReadDrafts = userRole === "OPERATION" || ADMIN_ROLES.includes(userRole || "");
     const draftWhere = canReadDrafts ? this.visibility.scopeWhere("drafts", userRole, userId) : undefined;
-    const [items, total, processingCount, draftCount, archivedCount] = await Promise.all([
+    const usesImageMetric = Boolean(filters.imageStatus || imageGroupStatuses) || ["design-assignment", "design-reviews", "design-tasks"].includes(scope);
+    const imageMetricWhere = usesImageMetric
+      ? this.visibility.imageTaskMetricWhere(
+          scope,
+          userRole,
+          userId,
+          filters.imageStatus ? String(filters.imageStatus) : undefined,
+          imageGroupStatuses,
+        )
+      : undefined;
+    const [items, total, processingCount, draftCount, archivedCount, imageMetricTotal] = await Promise.all([
       this.prisma.task.findMany({
         where,
         orderBy: [{ priority: "desc" }, { createdAt: "desc" }, { id: "desc" }],
@@ -71,8 +89,17 @@ export class TasksService {
       this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId) }),
       draftWhere ? this.prisma.task.count({ where: draftWhere }) : Promise.resolve(0),
       this.prisma.task.count({ where: this.visibility.scopeWhere("archived", userRole, userId) }),
+      imageMetricWhere ? this.prisma.imageTask.count({ where: imageMetricWhere }) : Promise.resolve(0),
     ]);
-    return { items, total, page, pageSize, scopeCounts: { processing: processingCount, drafts: draftCount, archived: archivedCount } };
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      metricTotal: usesImageMetric ? imageMetricTotal : total,
+      metricUnit: usesImageMetric ? "张" : "条",
+      scopeCounts: { processing: processingCount, drafts: draftCount, archived: archivedCount },
+    };
   }
 
   async findOne(id: number, userRole?: string, userId?: number) {

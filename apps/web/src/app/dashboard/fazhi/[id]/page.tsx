@@ -18,8 +18,7 @@ const taskStatusLabels: Record<string, string> = {
   DESIGN_ASSIGNED: "已分配设计",
   IN_DESIGN: "设计中",
   DESIGN_REVIEW: "待设计审核",
-  DESIGN_REJECTED: "设计退回修改",
-  DESIGN_APPROVED: "设计审核已通过",
+  DESIGN_APPROVED: "已完成",
   COMPLETED: "已完成",
 };
 
@@ -30,7 +29,7 @@ const imageStatusLabels: Record<string, string> = {
   IN_PROGRESS: "设计中",
   SUBMITTED_FOR_REVIEW: "已提交审核",
   REVISION_REQUIRED: "退回修改",
-  APPROVED: "已通过",
+  APPROVED: "已完成",
   COMPLETED: "已完成",
 };
 

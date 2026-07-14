@@ -17,11 +17,7 @@ const statusLabels: Record<string, string> = {
   DESIGN_ASSIGNED: "已分配设计",
   IN_DESIGN: "设计中",
   DESIGN_REVIEW: "待设计审核",
-  DESIGN_REJECTED: "设计退回修改",
-  DESIGN_APPROVED: "设计审核已通过",
-  TECH_REVIEW: "待技术审核",
-  TECH_APPROVED: "技术审核通过",
-  INVENTORY_PENDING: "待上传进销存",
+  DESIGN_APPROVED: "已完成",
   COMPLETED: "已完成",
   CANCELLED: "已取消",
 };
@@ -40,7 +36,7 @@ const statusColors: Record<string, string> = {
 
 const DESIGN_VISIBLE = ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW", "DESIGN_APPROVED", "COMPLETED"];
 const ARCHIVE_STATUSES = ["DESIGN_APPROVED", "COMPLETED", "CANCELLED"];
-const SUPERVISOR_SCOPES = ["ops-approvals", "design-assignment", "design-reviews", "design-tasks"];
+const SUPERVISOR_SCOPES = ["ops-approvals", "approval-history", "design-flow-history", "design-assignment", "design-reviews", "design-tasks"];
 const LIST_SCOPES = ["processing", "drafts", "archived", ...SUPERVISOR_SCOPES];
 
 function normalizeStatus(value: string | null) {
@@ -92,6 +88,9 @@ export default function FazhiListPage() {
     if (next.search) params.set("search", next.search);
     if (next.priority) params.set("priority", next.priority);
     if (next.imageStatus) params.set("imageStatus", next.imageStatus);
+    if (next.imageGroup) params.set("imageGroup", next.imageGroup);
+    if (next.statusGroup) params.set("statusGroup", next.statusGroup);
+    if (next.approvalAction) params.set("approvalAction", next.approvalAction);
     params.set("scope", next.scope || "processing");
     if (next.mine) params.set("mine", next.mine);
     if (next.scope) params.set("scope", next.scope);
@@ -143,6 +142,9 @@ export default function FazhiListPage() {
       search: params.get("search") || undefined,
       priority: params.get("priority") || undefined,
       imageStatus: params.get("imageStatus") || undefined,
+      imageGroup: params.get("imageGroup") || undefined,
+      statusGroup: params.get("statusGroup") || undefined,
+      approvalAction: params.get("approvalAction") || undefined,
       mine: params.get("mine") || undefined,
     };
     setFilters(initialFilters);
@@ -377,6 +379,13 @@ export default function FazhiListPage() {
       </Card>
 
       <Card>
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary">
+            {data.metricUnit === "张"
+              ? `匹配图片任务 ${data.metricTotal ?? 0} 张，涉及法旨 ${data.total ?? 0} 条`
+              : `共 ${data.total ?? 0} 条法旨`}
+          </Text>
+        </div>
         {canBatchPriorityRole && (
           <Row justify="space-between" align="middle" style={{ marginBottom: 12, gap: 8 }}>
             <Space wrap>

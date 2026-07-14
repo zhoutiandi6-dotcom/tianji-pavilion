@@ -1,4 +1,4 @@
-﻿import { Controller, Get, Param, UseGuards, ParseIntPipe } from "@nestjs/common";
+import { Controller, Get, Param, ParseIntPipe, Request, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { TimelineService } from "./timeline.service";
 
@@ -8,7 +8,7 @@ export class TimelineController {
   constructor(private service: TimelineService) {}
 
   @Get("task/:taskId")
-  async getTaskTimeline(@Param("taskId", ParseIntPipe) taskId: number) {
-    return this.service.getTaskTimeline(taskId);
+  getTaskTimeline(@Param("taskId", ParseIntPipe) taskId: number, @Request() req: any) {
+    return this.service.getTaskTimeline(taskId, req.user.role, Number(req.user.sub));
   }
 }
