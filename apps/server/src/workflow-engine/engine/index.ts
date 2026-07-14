@@ -7,6 +7,7 @@ import {
   WorkflowApproved, WorkflowCompleted, WorkflowCreated, WorkflowRejected,
   WorkflowSubmitted, WorkflowWithdrawn,
 } from "../../domain-events";
+import { SUBMISSION_RESULT, SUBMISSION_TYPE } from "../submission-audit";
 
 export interface WorkflowActionResult {
   task: any;
@@ -27,11 +28,11 @@ export class WorkflowEngine {
     return task;
   }
 
-  private async transition(taskId: number, currentStatus: string, nextStatus: string) {
-    if (!StateMachine.canTransition(currentStatus, nextStatus, "task")) {
-      throw new BadRequestException(`非法状态转换: ${currentStatus} -> ${nextStatus}`);
-    }
-    return this.prisma.task.update({ where: { id: taskId }, data: { workflowStatus: nextStatus } });
+  private findLatestSubmission(tx: any, taskId: number, result: string) {
+    return tx.taskSubmissionRecord.findFirst({
+      where: { taskId, result },
+      orderBy: { submissionSequence: "desc" },
+    });
   }
 
   async publishCreated(taskId: number, creatorId: number, serialNumber: string): Promise<WorkflowActionResult> {
@@ -51,7 +52,25 @@ export class WorkflowEngine {
     if (!StateMachine.canTransition(task.workflowStatus, TASK_WORKFLOW_STATUS.SUBMITTED, "task")) {
       throw new BadRequestException(`非法状态转换: ${task.workflowStatus} -> ${TASK_WORKFLOW_STATUS.SUBMITTED}`);
     }
+    const submittedAt = new Date();
+    const submissionType = task.workflowStatus === TASK_WORKFLOW_STATUS.OPS_REJECTED
+      ? SUBMISSION_TYPE.RESUBMIT
+      : SUBMISSION_TYPE.INITIAL;
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      const sequence = await tx.taskSubmissionRecord.aggregate({
+        where: { taskId },
+        _max: { submissionSequence: true },
+      });
+      await tx.taskSubmissionRecord.create({
+        data: {
+          taskId,
+          submitterId: userId,
+          submittedAt,
+          submissionType,
+          submissionSequence: (sequence._max.submissionSequence ?? 0) + 1,
+          result: SUBMISSION_RESULT.PENDING,
+        },
+      });
       await tx.imageTask.updateMany({
         where: { taskId },
         data: { status: "WAITING_OPS_APPROVAL" },
@@ -75,7 +94,24 @@ export class WorkflowEngine {
     if (task.creatorId !== userId && userRole === "OPERATION") {
       throw new ForbiddenException("只能撤回自己的法旨");
     }
-    const updated = await this.transition(taskId, task.workflowStatus, TASK_WORKFLOW_STATUS.DRAFT);
+    const withdrawnAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const submission = await this.findLatestSubmission(tx, taskId, SUBMISSION_RESULT.PENDING);
+      if (submission) {
+        await tx.taskSubmissionRecord.update({
+          where: { id: submission.id },
+          data: {
+            withdrawnAt,
+            withdrawnById: userId,
+            result: SUBMISSION_RESULT.WITHDRAWN,
+          },
+        });
+      }
+      return tx.task.update({
+        where: { id: taskId },
+        data: { workflowStatus: TASK_WORKFLOW_STATUS.DRAFT },
+      });
+    });
     const event = new WorkflowWithdrawn(taskId, userId, task.serialNumber);
     await this.recordLog(userId, "withdraw_ops_approval", "task", taskId, `撤回运营主管审批: ${task.serialNumber}`);
     await this.eventBus.publish(event.name, event);
@@ -91,8 +127,21 @@ export class WorkflowEngine {
       throw new BadRequestException(`非法状态转换: ${task.workflowStatus} -> ${TASK_WORKFLOW_STATUS.OPS_APPROVED}`);
     }
 
+    const processedAt = new Date();
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      await tx.approvalRecord.create({ data: { taskId, approverId: userId, action: "OPS_APPROVED", comment } });
+      const approvalRecord = await tx.approvalRecord.create({ data: { taskId, approverId: userId, action: "OPS_APPROVED", comment } });
+      const submission = await this.findLatestSubmission(tx, taskId, SUBMISSION_RESULT.PENDING);
+      if (submission) {
+        await tx.taskSubmissionRecord.update({
+          where: { id: submission.id },
+          data: {
+            processedAt,
+            processedById: userId,
+            result: SUBMISSION_RESULT.APPROVED,
+            approvalRecordId: approvalRecord.id,
+          },
+        });
+      }
       await tx.imageTask.updateMany({
         where: { taskId, status: "WAITING_OPS_APPROVAL" },
         data: { status: "PENDING_ASSIGNMENT" },
@@ -103,7 +152,7 @@ export class WorkflowEngine {
           workflowStatus: TASK_WORKFLOW_STATUS.OPS_APPROVED,
           approverId: userId,
           approvalComment: comment,
-          approvedAt: new Date().toISOString(),
+          approvedAt: processedAt.toISOString(),
         },
       });
     });
@@ -124,8 +173,21 @@ export class WorkflowEngine {
       throw new BadRequestException(`非法状态转换: ${task.workflowStatus} -> ${TASK_WORKFLOW_STATUS.OPS_REJECTED}`);
     }
 
+    const processedAt = new Date();
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      await tx.approvalRecord.create({ data: { taskId, approverId: userId, action: "OPS_REJECTED", comment: comment.trim() } });
+      const approvalRecord = await tx.approvalRecord.create({ data: { taskId, approverId: userId, action: "OPS_REJECTED", comment: comment.trim() } });
+      const submission = await this.findLatestSubmission(tx, taskId, SUBMISSION_RESULT.PENDING);
+      if (submission) {
+        await tx.taskSubmissionRecord.update({
+          where: { id: submission.id },
+          data: {
+            processedAt,
+            processedById: userId,
+            result: SUBMISSION_RESULT.REJECTED,
+            approvalRecordId: approvalRecord.id,
+          },
+        });
+      }
       return tx.task.update({
         where: { id: taskId },
         data: { workflowStatus: TASK_WORKFLOW_STATUS.OPS_REJECTED, approverId: userId, approvalComment: comment.trim() },
@@ -156,6 +218,18 @@ export class WorkflowEngine {
     }
     const updated = await this.prisma.$transaction(async (tx: any) => {
       await tx.approvalRecord.create({ data: { taskId, approverId: userId, action: "OPS_APPROVAL_ROLLBACK", comment: "rollback approval from list" } });
+      const submission = await this.findLatestSubmission(tx, taskId, SUBMISSION_RESULT.APPROVED);
+      if (submission) {
+        await tx.taskSubmissionRecord.update({
+          where: { id: submission.id },
+          data: {
+            processedAt: null,
+            processedById: null,
+            result: SUBMISSION_RESULT.PENDING,
+            approvalRecordId: null,
+          },
+        });
+      }
       await tx.imageTask.updateMany({
         where: { taskId, status: "PENDING_ASSIGNMENT" },
         data: { status: "WAITING_OPS_APPROVAL" },

@@ -25,6 +25,12 @@ describe("WorkflowEngine", () => {
       approvalRecord: {
         create: jest.fn().mockResolvedValue({ id: 1 }),
       },
+      taskSubmissionRecord: {
+        aggregate: jest.fn().mockResolvedValue({ _max: { submissionSequence: null } }),
+        create: jest.fn().mockResolvedValue({ id: 1 }),
+        findFirst: jest.fn().mockResolvedValue({ id: 1, submissionSequence: 1 }),
+        update: jest.fn().mockResolvedValue({ id: 1 }),
+      },
       imageTask: {
         findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -52,7 +58,47 @@ describe("WorkflowEngine", () => {
     it("allows OPERATION to submit", async () => {
       await engine.submit(1, 1, "OPERATION");
       expect(prisma.task.update).toHaveBeenCalled();
+      expect(prisma.taskSubmissionRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 1,
+          submitterId: 1,
+          submissionType: "INITIAL",
+          submissionSequence: 1,
+          result: "PENDING",
+        }),
+      });
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.submitted", expect.any(Object));
+    });
+
+    it("creates RESUBMIT records with the next sequence", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "OPS_REJECTED" });
+      prisma.taskSubmissionRecord.aggregate.mockResolvedValue({ _max: { submissionSequence: 2 } });
+      await engine.submit(1, 1, "OPERATION");
+      expect(prisma.taskSubmissionRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ submissionType: "RESUBMIT", submissionSequence: 3 }),
+      });
+    });
+
+    it("increments submissionSequence across repeated submissions", async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce({ ...mockTask, workflowStatus: "DRAFT" })
+        .mockResolvedValueOnce({ ...mockTask, workflowStatus: "OPS_REJECTED" });
+      prisma.taskSubmissionRecord.aggregate
+        .mockResolvedValueOnce({ _max: { submissionSequence: null } })
+        .mockResolvedValueOnce({ _max: { submissionSequence: 1 } });
+
+      await engine.submit(1, 1, "OPERATION");
+      await engine.submit(1, 1, "OPERATION");
+
+      expect(prisma.taskSubmissionRecord.create.mock.calls[0][0].data.submissionSequence).toBe(1);
+      expect(prisma.taskSubmissionRecord.create.mock.calls[1][0].data.submissionSequence).toBe(2);
+    });
+
+    it("does not update task state when submission audit creation fails", async () => {
+      prisma.taskSubmissionRecord.create.mockRejectedValue(new Error("audit write failed"));
+      await expect(engine.submit(1, 1, "OPERATION")).rejects.toThrow("audit write failed");
+      expect(prisma.task.update).not.toHaveBeenCalled();
+      expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
     it("rejects DESIGNER from submitting", async () => {
@@ -69,6 +115,14 @@ describe("WorkflowEngine", () => {
       prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
       await engine.approve(1, 1, "OPERATION_MANAGER");
       expect(prisma.approvalRecord.create).toHaveBeenCalled();
+      expect(prisma.taskSubmissionRecord.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: expect.objectContaining({
+          processedById: 1,
+          result: "APPROVED",
+          approvalRecordId: 1,
+        }),
+      });
       expect(prisma.task.update).toHaveBeenCalled();
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.approved", expect.any(Object));
     });
@@ -91,6 +145,14 @@ describe("WorkflowEngine", () => {
           data: expect.objectContaining({ action: "OPS_REJECTED", comment: "需要修改" }),
         }),
       );
+      expect(prisma.taskSubmissionRecord.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: expect.objectContaining({
+          processedById: 1,
+          result: "REJECTED",
+          approvalRecordId: 1,
+        }),
+      });
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.rejected", expect.any(Object));
     });
   });
@@ -99,6 +161,10 @@ describe("WorkflowEngine", () => {
     it("allows OPERATION to withdraw their own task", async () => {
       prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
       await engine.withdraw(1, 1, "OPERATION");
+      expect(prisma.taskSubmissionRecord.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: expect.objectContaining({ withdrawnById: 1, result: "WITHDRAWN" }),
+      });
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.withdrawn", expect.any(Object));
     });
 

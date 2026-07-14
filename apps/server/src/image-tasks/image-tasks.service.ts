@@ -148,10 +148,43 @@ export class ImageTasksService {
     return designer;
   }
 
+  private createAssignmentAudit(
+    tx: any,
+    imageTask: { id: number; designerId?: number | null },
+    newDesignerId: number,
+    assignedById: number,
+    assignedAt: Date,
+    assignmentType: "INITIAL" | "REASSIGN",
+  ) {
+    return tx.auditEvent.create({
+      data: {
+        resourceType: "image_task",
+        resourceId: imageTask.id,
+        action: assignmentType === "INITIAL" ? "assign_designer" : "reassign_designer",
+        operatorId: assignedById,
+        correlationId: null,
+        metadata: JSON.stringify({
+          imageTaskId: imageTask.id,
+          previousDesignerId: imageTask.designerId ?? null,
+          newDesignerId,
+          assignedById,
+          assignedAt: assignedAt.toISOString(),
+          assignmentType,
+        }),
+      },
+    });
+  }
+
   private async assignImageTasks(imageTasks: any[], designerId: number, userId: number, mode: "ASSIGN" | "REASSIGN") {
+    const assignedAt = new Date();
+    const assignmentType = mode === "ASSIGN" ? "INITIAL" : "REASSIGN";
     await this.prisma.$transaction(async (tx: any) => {
       for (const item of imageTasks) {
-        await tx.imageTask.update({ where: { id: item.id }, data: { designerId, status: "NOT_STARTED" } });
+        await tx.imageTask.update({
+          where: { id: item.id },
+          data: { designerId, assignedAt, assignedById: userId, status: "NOT_STARTED" },
+        });
+        await this.createAssignmentAudit(tx, item, designerId, userId, assignedAt, assignmentType);
       }
     });
     for (const item of imageTasks) {
@@ -198,8 +231,20 @@ export class ImageTasksService {
       throw new BadRequestException("存在未上传完成稿的图片任务，无法批量审核通过");
     }
     const status = dto.action === "APPROVE" ? "APPROVED" : "REVISION_REQUIRED";
+    const approvedAt = dto.action === "APPROVE" ? new Date() : null;
     await this.prisma.$transaction(async (tx: any) => {
-      for (const item of imageTasks) await tx.imageTask.update({ where: { id: item.id }, data: { status, reviewStatus: status, reviewRemark: remark || item.reviewRemark } });
+      for (const item of imageTasks) {
+        await tx.imageTask.update({
+          where: { id: item.id },
+          data: {
+            status,
+            reviewStatus: status,
+            reviewRemark: remark || item.reviewRemark,
+            approvedAt,
+            approvedById: dto.action === "APPROVE" ? userId : null,
+          },
+        });
+      }
     });
     for (const item of imageTasks) {
       await this.log.log({ userId, action: dto.action === "APPROVE" ? "design_review_approve" : "design_review_reject", targetType: "image_task", targetId: item.id, content: dto.action === "APPROVE" ? "批量审核通过" : "批量退回修改", afterValue: { status, reviewRemark: remark } });
@@ -271,6 +316,8 @@ export class ImageTasksService {
         throw new ForbiddenException("Designers can only be assigned after operation manager approval");
       }
       const data: any = {};
+      let assignmentType: "INITIAL" | "REASSIGN" | null = null;
+      let assignedAt: Date | null = null;
       if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId) {
         await this.ensureDesigner(Number(dto.designerId));
         const assignable = imageTask.status === "PENDING_ASSIGNMENT" && !imageTask.designerId;
@@ -278,7 +325,11 @@ export class ImageTasksService {
         if (!assignable && !reassignable) {
           throw new ForbiddenException("仅待分配任务可分配、仅已分配未开始任务可改派");
         }
+        assignmentType = imageTask.designerId ? "REASSIGN" : "INITIAL";
+        assignedAt = new Date();
         data.designerId = dto.designerId;
+        data.assignedAt = assignedAt;
+        data.assignedById = userId;
         data.status = "NOT_STARTED";
       }
       if (dto.status === "APPROVED" || dto.status === "REVISION_REQUIRED") {
@@ -294,9 +345,17 @@ export class ImageTasksService {
         data.status = dto.status;
         data.reviewStatus = dto.status;
         data.reviewRemark = (dto.reviewRemark ?? dto.remark)?.trim() || imageTask.reviewRemark;
+        data.approvedAt = dto.status === "APPROVED" ? new Date() : null;
+        data.approvedById = dto.status === "APPROVED" ? userId : null;
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
-      const result = await this.prisma.imageTask.update({ where: { id }, data });
+      const result = await this.prisma.$transaction(async (tx: any) => {
+        const updated = await tx.imageTask.update({ where: { id }, data });
+        if (assignmentType && assignedAt && dto.designerId !== undefined) {
+          await this.createAssignmentAudit(tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType);
+        }
+        return updated;
+      });
       if (dto.designerId && dto.designerId !== imageTask.designerId) {
         await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(id, imageTask.taskId, dto.designerId));
       }

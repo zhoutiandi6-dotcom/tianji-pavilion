@@ -12,8 +12,8 @@
 | --- | --- | --- | --- |
 | `assignedAt` | `DateTime?` | `@@index([assignedAt])` | 首次或最近一次有效分配时间 |
 | `assignedById` | `Int?` | 关联 `User`，`@@index([assignedById])` | 执行分配或改派的人 |
-| `reviewedAt` | `DateTime?` | `@@index([reviewedAt])` | 最近一次设计审核时间 |
-| `reviewedById` | `Int?` | 关联 `User`，`@@index([reviewedById])` | 执行设计审核的人 |
+| `approvedAt` | `DateTime?` | `@@index([approvedAt])` | 设计主管最终审核通过时间，不记录审核退回 |
+| `approvedById` | `Int?` | 关联 `User`，`onDelete: SetNull`，`@@index([approvedById])` | 执行最终审核通过的设计主管 |
 
 关系删除策略建议使用 `onDelete: SetNull`，避免停用或删除用户后破坏任务审计链。改派时更新 `assignedAt/assignedById`，同时保留 AuditEvent；不能仅依靠当前 `designerId` 推断历史分配。
 

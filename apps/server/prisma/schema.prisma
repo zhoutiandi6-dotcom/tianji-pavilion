@@ -67,7 +67,12 @@ model User {
   role                Role             @relation(fields: [roleId], references: [id])
   createdTasks        Task[]           @relation("TaskCreator")
   imageTasks          ImageTask[]      @relation("ImageTaskDesigner")
+  imageTasksAssigned  ImageTask[]      @relation("ImageTaskAssignedBy")
+  imageTasksApproved  ImageTask[]      @relation("ImageTaskApprovedBy")
   approvalRecordsMade ApprovalRecord[]
+  submissionsMade     TaskSubmissionRecord[] @relation("TaskSubmissionSubmitter")
+  submissionsWithdrawn TaskSubmissionRecord[] @relation("TaskSubmissionWithdrawnBy")
+  submissionsProcessed TaskSubmissionRecord[] @relation("TaskSubmissionProcessedBy")
   operationLogs       OperationLog[]
   uploadedAttachments Attachment[]
   announcements       Announcement[]
@@ -154,6 +159,7 @@ model Task {
   store           Store?           @relation(fields: [storeId], references: [id])
   requirementType RequirementType? @relation(fields: [requirementTypeId], references: [id])
   approvalRecords ApprovalRecord[]
+  submissionRecords TaskSubmissionRecord[]
   imageTasks      ImageTask[]
   attachments     Attachment[]
 
@@ -180,10 +186,42 @@ model ApprovalRecord {
 
   task     Task @relation(fields: [taskId], references: [id])
   approver User @relation(fields: [approverId], references: [id])
+  submissionRecord TaskSubmissionRecord?
 
   @@index([taskId])
   @@index([approverId])
   @@map("approval_records")
+}
+
+model TaskSubmissionRecord {
+  id                 Int      @id @default(autoincrement())
+  taskId             Int
+  submitterId        Int
+  submittedAt        DateTime @default(now())
+  submissionType     String
+  submissionSequence Int
+  withdrawnAt        DateTime?
+  withdrawnById      Int?
+  processedAt        DateTime?
+  processedById      Int?
+  result             String   @default("PENDING")
+  approvalRecordId   Int?     @unique
+  createdAt          DateTime @default(now())
+
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  submitter      User            @relation("TaskSubmissionSubmitter", fields: [submitterId], references: [id], onDelete: Restrict)
+  withdrawnBy    User?           @relation("TaskSubmissionWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
+  processedBy    User?           @relation("TaskSubmissionProcessedBy", fields: [processedById], references: [id], onDelete: Restrict)
+  approvalRecord ApprovalRecord? @relation(fields: [approvalRecordId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, submissionSequence])
+  @@index([taskId])
+  @@index([submitterId])
+  @@index([withdrawnById])
+  @@index([processedById])
+  @@index([submittedAt])
+  @@index([result])
+  @@map("task_submission_records")
 }
 
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
@@ -203,6 +241,10 @@ model ImageTask {
   useUnifiedRequirement  Boolean   @default(true)
   inheritFromImageIndex  Int?
   designerId             Int?
+  assignedAt             DateTime?
+  assignedById           Int?
+  approvedAt             DateTime?
+  approvedById           Int?
   status                 String    @default("WAITING_OPS_APPROVAL")
   sortOrder              Int       @default(0)
   remark                 String?
@@ -217,10 +259,16 @@ model ImageTask {
 
   task        Task         @relation(fields: [taskId], references: [id])
   designer    User?        @relation("ImageTaskDesigner", fields: [designerId], references: [id])
+  assignedBy  User?        @relation("ImageTaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  approvedBy  User?        @relation("ImageTaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   attachments Attachment[]
 
   @@index([taskId])
   @@index([designerId])
+  @@index([assignedAt])
+  @@index([assignedById])
+  @@index([approvedAt])
+  @@index([approvedById])
   @@index([status])
   @@index([createdAt])
   @@map("image_tasks")
