@@ -7,6 +7,7 @@ import {
   DESIGN_VISIBLE_STATUSES,
   TaskVisibilityService,
 } from "../common/task-visibility.service";
+import { WeeklyDesignerPlansService } from "../weekly-plans/weekly-designer-plans.service";
 
 const RECENT_ACTION_LABELS: Record<string, string> = {
   create_task: "创建法旨",
@@ -56,6 +57,7 @@ export class DashboardController {
   constructor(
     private prisma: PrismaService,
     private visibility: TaskVisibilityService,
+    private weeklyDesignerPlans: WeeklyDesignerPlansService,
   ) {}
 
   @Get("overview")
@@ -64,12 +66,13 @@ export class DashboardController {
     const role = String(req.user.role || "");
     const taskWhere = this.visibility.visibleWhere(role, userId);
 
-    const [cards, todo, recent, flowCounts, recentActivities] = await Promise.all([
+    const [cards, todo, recent, flowCounts, recentActivities, weeklyPlan] = await Promise.all([
       this.getCards(role, userId, taskWhere),
       this.getTodoItems(role, userId),
       this.getRecentTasks(role, userId, taskWhere),
       this.getFlowCounts(role, taskWhere),
       this.getRecentActivities(role, userId, taskWhere),
+      role === "DESIGN_MANAGER" ? this.weeklyDesignerPlans.getWeekOverview(userId, role) : Promise.resolve(null),
     ]);
 
     return {
@@ -84,6 +87,7 @@ export class DashboardController {
       recentTotal: recent.total,
       recentActivities,
       flowCounts,
+      weeklyPlan,
       quickActions: this.quickActions(role),
     };
   }
@@ -401,7 +405,8 @@ export class DashboardController {
     }
     if (role === "DESIGN_MANAGER") {
       return [
-        { label: "处理待分配", href: "/dashboard/fazhi?scope=design-assignment" },
+        { label: "管理本周计划", href: "/dashboard/weekly-designer-plans" },
+        { label: "处理待分配", href: "/dashboard/weekly-designer-plans?tab=unassigned" },
         { label: "处理待审核", href: "/dashboard/fazhi?scope=design-reviews" },
       ];
     }

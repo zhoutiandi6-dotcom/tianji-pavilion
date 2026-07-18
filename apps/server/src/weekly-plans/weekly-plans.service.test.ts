@@ -130,18 +130,26 @@ describe("WeeklyPlansService", () => {
 
   it("updates the existing plan item during reassignment without adding a second item", async () => {
     prisma.weeklyPlan.findUnique.mockResolvedValue(draftPlan({ status: "ACTIVE" }));
+    prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
     prisma.weeklyPlanItem.findUnique.mockResolvedValue({ id: 101, imageTaskId: 10, designerId: 5, status: "PLANNED" });
-    const result = await service.syncAssignmentInTransaction(prisma, imageTask({ designerId: 5 }), 7, 9, new Date(), "REASSIGN");
-    expect(result.state).toBe("REASSIGNED");
+    const result = await service.addAssignedTasksInTransaction(prisma, [imageTask({ designerId: 5 })], 7, 9, new Date(), "REASSIGN");
+    expect(result).toEqual(expect.objectContaining({ id: 1, status: "ACTIVE" }));
     expect(prisma.weeklyPlanItem.update).toHaveBeenCalledWith({ where: { id: 101 }, data: expect.objectContaining({ designerId: 7, reassignedAt: expect.any(Date) }) });
     expect(prisma.weeklyPlanItem.create).not.toHaveBeenCalled();
   });
 
-  it("does not auto-add tasks when no current weekly plan exists", async () => {
+  it("creates a current-week DRAFT plan and adds assigned tasks when no plan exists", async () => {
     prisma.weeklyPlan.findUnique.mockResolvedValue(null);
-    const result = await service.syncAssignmentInTransaction(prisma, imageTask(), 7, 9, new Date(), "INITIAL");
-    expect(result).toEqual(expect.objectContaining({ state: "NO_PLAN" }));
-    expect(prisma.weeklyPlanItem.create).not.toHaveBeenCalled();
+    prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
+    prisma.weeklyPlanItem.findUnique.mockResolvedValue(null);
+    const result = await service.addAssignedTasksInTransaction(prisma, [imageTask()], 7, 9, new Date(), "INITIAL");
+    expect(result).toEqual(expect.objectContaining({ id: 1, status: "DRAFT" }));
+    expect(prisma.weeklyPlan.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: "DRAFT", createdById: 9 }),
+    });
+    expect(prisma.weeklyPlanItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ imageTaskId: 10, designerId: 7, source: "INITIAL_PLAN" }),
+    });
   });
 
   it("marks only an ACTIVE planned item as completed after final review", async () => {

@@ -6,6 +6,7 @@ import { Button, Card, Checkbox, Col, Dropdown, Empty, Input, Modal, Pagination,
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { authApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayRequester, displayUserName } from "@/lib/display";
+import TaskAssignmentModal from "@/components/TaskAssignmentModal";
 
 const { Title, Text } = Typography;
 
@@ -67,7 +68,6 @@ export default function FazhiListPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [designers, setDesigners] = useState<any[]>([]);
   const [assignment, setAssignment] = useState<{ taskIds: number[]; mode: "ASSIGN" | "REASSIGN" } | null>(null);
-  const [assignmentDesignerId, setAssignmentDesignerId] = useState<number | undefined>();
   const [review, setReview] = useState<{ taskIds: number[]; action: "APPROVE" | "REJECT" } | null>(null);
   const [reviewRemark, setReviewRemark] = useState("");
 
@@ -129,6 +129,12 @@ export default function FazhiListPage() {
   }, []);
 
   useEffect(() => {
+    if (role === "DESIGN_MANAGER" && filters.scope === "design-assignment") {
+      router.replace("/dashboard/weekly-designer-plans?tab=unassigned");
+    }
+  }, [role, filters.scope, router]);
+
+  useEffect(() => {
     if (role === "DESIGN_MANAGER" || isAdmin) {
       userApi.findDesigners().then((res) => setDesigners(res.data.data || res.data || [])).catch(() => setDesigners([]));
     }
@@ -174,14 +180,6 @@ export default function FazhiListPage() {
   const batchEligible = (workflowStatus: string) => selectionRows.length > 0 && selectionRows.every((row: any) => row.workflowStatus === workflowStatus);
   const batchReason = (workflowStatus: string) => !selectionRows.length ? "请先选择法旨" : batchEligible(workflowStatus) ? "" : "选中项包含不符合当前操作状态的法旨";
 
-  const submitAssignment = async () => {
-    if (!assignmentDesignerId || !assignment) return message.warning("请选择设计师");
-    try {
-      await imageTaskApi.batchAssignTasks({ taskIds: assignment.taskIds, designerId: assignmentDesignerId, mode: assignment.mode });
-      message.success(assignment.mode === "ASSIGN" ? "已分配设计师" : "已改派设计师");
-      setAssignment(null); setAssignmentDesignerId(undefined); loadData(filters);
-    } catch (err) { message.error(getErrorMessage(err)); }
-  };
 
   const submitReview = async () => {
     if (!review) return;
@@ -589,9 +587,7 @@ export default function FazhiListPage() {
           />
         </div>
       </Card>
-      <Modal title={assignment?.mode === "REASSIGN" ? "改派设计师" : "分配设计师"} open={!!assignment} onCancel={() => setAssignment(null)} onOk={submitAssignment} okText="确认">
-        <Select value={assignmentDesignerId} onChange={setAssignmentDesignerId} placeholder="选择设计师" style={{ width: "100%" }} options={designers.map((user) => ({ value: user.userId ?? user.id, label: `${user.name || displayUserName(user)}（${user.username}）` }))} />
-      </Modal>
+      <TaskAssignmentModal open={!!assignment} taskIds={assignment?.taskIds || []} tasks={data.items || []} designers={designers} mode={assignment?.mode} onClose={() => setAssignment(null)} onSuccess={() => loadData(filters)} />
       <Modal title={review?.action === "REJECT" ? "退回修改" : "审核通过"} open={!!review} onCancel={() => { setReview(null); setReviewRemark(""); }} onOk={submitReview} okText="确认">
         {review?.action === "REJECT" ? <Input.TextArea value={reviewRemark} onChange={(event) => setReviewRemark(event.target.value)} rows={4} placeholder="请填写退回原因（必填）" /> : <Input.TextArea value={reviewRemark} onChange={(event) => setReviewRemark(event.target.value)} rows={3} placeholder="审核备注（可选）" />}
       </Modal>

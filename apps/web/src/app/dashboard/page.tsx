@@ -23,10 +23,10 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
-import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
 import api from "@/lib/api";
 import Loading from "@/components/Loading";
+import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
+import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
 import { displayUserName } from "@/lib/display";
 
 const { Title, Text } = Typography;
@@ -123,6 +123,7 @@ export default function DashboardPage() {
   const todoItems = data.todoItems || [];
   const flowCounts = data.flowCounts || [];
   const recentActivities = data.recentActivities || [];
+  const weeklyPlan = data.weeklyPlan;
   const totalFlow = flowCounts.reduce((sum: number, item: any) => sum + Number(item.count || 0), 0);
   const doneFlow = flowCounts.find((item: any) => item.status === "DESIGN_APPROVED")?.count || 0;
   const progress = totalFlow ? Math.round((Number(doneFlow) / totalFlow) * 100) : 0;
@@ -210,6 +211,47 @@ export default function DashboardPage() {
           </Col>
         ))}
       </Row>
+
+      {weeklyPlan && (
+        <Card
+          title="本周计划进度"
+          bordered={false}
+          style={{ borderRadius: 8, marginTop: 18, boxShadow: "0 10px 28px rgba(20,20,20,0.05)" }}
+          extra={<Button type="link" onClick={() => router.push("/dashboard/weekly-designer-plans")}>管理本周计划</Button>}
+        >
+          <Row gutter={[12, 12]}>
+            {[
+              ["计划总数", weeklyPlan.summary?.targetImageCount || 0],
+              ["已分配", weeklyPlan.summary?.assignedCount || 0],
+              ["设计完成", weeklyPlan.summary?.completedCount || 0],
+              ["待审核", weeklyPlan.summary?.pendingReviewCount || 0],
+              ["剩余数量", weeklyPlan.summary?.remainingTargetCount || 0],
+              ["完成率", weeklyPlan.summary?.completionRate === null ? "未设置" : `${weeklyPlan.summary?.completionRate || 0}%`],
+            ].map(([title, value]) => (
+              <Col xs={12} md={8} xl={4} key={String(title)}><Statistic title={title} value={value as any} /></Col>
+            ))}
+          </Row>
+          <List
+            style={{ marginTop: 14 }}
+            size="small"
+            dataSource={(weeklyPlan.designers || []).slice(0, 6)}
+            locale={{ emptyText: "暂无在职设计师" }}
+            renderItem={(item: any) => (
+              <List.Item>
+                <Space wrap>
+                  <Text strong>{item.designerName}</Text>
+                  <Text type="secondary">计划 {item.targetImageCount} 张</Text>
+                  <Text type="secondary">已分配 {item.assignedCount} 张</Text>
+                  <Text type="secondary">完成 {item.completedCount} 张</Text>
+                  <Tag color={item.completionRate === null ? "default" : item.completionRate >= 100 ? "success" : "processing"}>
+                    {item.completionRate === null ? "未设置" : `${item.completionRate}%`}
+                  </Tag>
+                </Space>
+              </List.Item>
+            )}
+          />
+        </Card>
+      )}
 
       <Card title="法旨流转状态" bordered={false} style={{ borderRadius: 8, marginTop: 18, boxShadow: "0 10px 28px rgba(20,20,20,0.05)" }}>
         {flowCounts.length ? (

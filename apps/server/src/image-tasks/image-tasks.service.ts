@@ -130,7 +130,7 @@ export class ImageTasksService {
     if (imageTasks.some((item) => item.task.workflowStatus !== "OPS_APPROVED" || item.designerId || item.status !== "PENDING_ASSIGNMENT")) {
       throw new ForbiddenException("仅已通过运营审批且待分配的图片任务可批量分配");
     }
-    const weeklyPlanResults = await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN", dto.includeInWeeklyPlan !== false);
+    await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN", dto.weekStart);
     await this.log.log({
       userId,
       action: "batch_assign_designer",
@@ -139,7 +139,7 @@ export class ImageTasksService {
       content: `批量分配设计师：${imageTasks.length} 项`,
       afterValue: { designerId: Number(dto.designerId), imageTaskIds: ids },
     });
-    return { total: imageTasks.length, successCount: imageTasks.length, failedCount: 0, results: ids.map((id, index) => ({ id, success: true, message: "已分配", weeklyPlan: weeklyPlanResults[index] })) };
+    return { total: imageTasks.length, successCount: imageTasks.length, failedCount: 0, results: ids.map((id) => ({ id, success: true, message: "已分配" })) };
   }
 
   private async ensureDesigner(designerId: number) {
@@ -182,23 +182,19 @@ export class ImageTasksService {
     designerId: number,
     userId: number,
     mode: "ASSIGN" | "REASSIGN",
-    includeInWeeklyPlan = true,
+    weekStart?: string,
   ) {
     const assignedAt = new Date();
     const assignmentType = mode === "ASSIGN" ? "INITIAL" : "REASSIGN";
-    const weeklyPlanResults = await this.prisma.$transaction(async (tx: any) => {
-      const results: any[] = [];
+    await this.prisma.$transaction(async (tx: any) => {
       for (const item of imageTasks) {
         await tx.imageTask.update({
           where: { id: item.id },
           data: { designerId, assignedAt, assignedById: userId, status: "NOT_STARTED" },
         });
         await this.createAssignmentAudit(tx, item, designerId, userId, assignedAt, assignmentType);
-        results.push(await this.weeklyPlans.syncAssignmentInTransaction(
-          tx, item, designerId, userId, assignedAt, assignmentType, includeInWeeklyPlan,
-        ));
       }
-      return results;
+      await this.weeklyPlans.addAssignedTasksInTransaction(tx, imageTasks, designerId, userId, assignedAt, assignmentType, weekStart);
     });
     for (const item of imageTasks) {
       await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(item.id, item.taskId, designerId));
@@ -211,7 +207,6 @@ export class ImageTasksService {
       });
     }
     await Promise.all([...new Set(imageTasks.map((item) => item.taskId))].map((taskId) => this.workflowEngine.recalcTaskStatus(taskId)));
-    return weeklyPlanResults;
   }
 
   async batchAssignTasks(dto: BatchAssignTasksDto, userId: number, userRole: string) {
@@ -226,9 +221,9 @@ export class ImageTasksService {
       ? item.status === "PENDING_ASSIGNMENT" && !item.designerId
       : item.status === "NOT_STARTED" && !!item.designerId));
     if (!imageTasks.length) throw new BadRequestException("所选法旨没有可处理的图片任务");
-    const weeklyPlanResults = await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.includeInWeeklyPlan !== false);
+    await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.weekStart);
     await this.log.log({ userId, action: "batch_assign_designer", targetType: "task", targetId: 0, content: `批量${dto.mode === "ASSIGN" ? "分配" : "改派"}设计师：${taskIds.length} 条法旨`, afterValue: { taskIds, designerId: dto.designerId, mode: dto.mode } });
-    return { total: taskIds.length, successCount: taskIds.length, failedCount: 0, weeklyPlan: weeklyPlanResults };
+    return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
   }
 
   async batchReviewTasks(dto: BatchReviewTasksDto, userId: number, userRole: string) {
@@ -368,14 +363,11 @@ export class ImageTasksService {
         data.approvedById = dto.status === "APPROVED" ? userId : null;
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
-      let weeklyPlanResult: unknown = null;
       const result = await this.prisma.$transaction(async (tx: any) => {
         const updated = await tx.imageTask.update({ where: { id }, data });
         if (assignmentType && assignedAt && dto.designerId !== undefined) {
           await this.createAssignmentAudit(tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType);
-          weeklyPlanResult = await this.weeklyPlans.syncAssignmentInTransaction(
-            tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType, dto.includeInWeeklyPlan !== false,
-          );
+          await this.weeklyPlans.addAssignedTasksInTransaction(tx, [imageTask], Number(dto.designerId), userId, assignedAt, assignmentType, dto.weekStart);
         }
         if (data.status === "APPROVED" && approvedAt) {
           await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, id, userId, approvedAt);
@@ -412,7 +404,7 @@ export class ImageTasksService {
           : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined);
         await this.eventBus.publish(event.name, event);
       }
-      return weeklyPlanResult ? { ...result, weeklyPlan: weeklyPlanResult } : result;
+      return result;
     }
 
     if (["OPERATION", "OWNER", "SUPER_ADMIN"].includes(userRole)) {
@@ -422,7 +414,8 @@ export class ImageTasksService {
           throw new ForbiddenException("Image task details can only be edited while the task is draft or rejected");
         }
       }
-      const result = await this.prisma.imageTask.update({ where: { id }, data: dto });
+      const { weekStart: _weekStart, ...imageTaskData } = dto;
+      const result = await this.prisma.imageTask.update({ where: { id }, data: imageTaskData });
       await this.log.log({
         userId,
         action: "edit_image_task",

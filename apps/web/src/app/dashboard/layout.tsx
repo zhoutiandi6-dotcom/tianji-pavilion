@@ -51,9 +51,9 @@ const getMenuItems = (role: string) => {
     return [
       ...common,
       fazhiCenter,
-      { key: "/dashboard/fazhi?scope=design-assignment", icon: <FileTextOutlined />, label: "待分配" },
       { key: "/dashboard/fazhi?scope=design-reviews", icon: <FileTextOutlined />, label: "待审核" },
       { key: "/dashboard/fazhi?scope=design-tasks", icon: <FileTextOutlined />, label: "设计任务" },
+      { key: "/dashboard/weekly-designer-plans", icon: <FileTextOutlined />, label: "本周计划" },
       notifications,
     ];
   }

@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString } from "class-validator";
+import { IsBoolean, IsDateString, IsInt, IsOptional, IsString } from "class-validator";
 
 export class UpdateImageTaskDto {
   @IsOptional() @IsString() imageTitle?: string;
@@ -10,7 +10,7 @@ export class UpdateImageTaskDto {
   @IsOptional() @IsBoolean() useUnifiedRequirement?: boolean;
   @IsOptional() @IsInt() inheritFromImageIndex?: number | null;
   @IsOptional() @IsInt() designerId?: number | null;
-  @IsOptional() @IsBoolean() includeInWeeklyPlan?: boolean;
+  @IsOptional() @IsDateString() weekStart?: string;
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() remark?: string;
   @IsOptional() @IsString() completedAttachmentUrl?: string;

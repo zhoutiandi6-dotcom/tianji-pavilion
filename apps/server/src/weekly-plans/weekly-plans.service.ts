@@ -59,6 +59,77 @@ export class WeeklyPlansService {
     throw new ForbiddenException("已关闭的周计划不可添加任务");
   }
 
+  private resolveAssignmentRange(weekStart: string | undefined, assignedAt: Date) {
+    if (!weekStart) return getShanghaiWeekRange(assignedAt);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+      throw new BadRequestException("weekStart must use YYYY-MM-DD");
+    }
+    const anchor = new Date(`${weekStart}T12:00:00+08:00`);
+    if (Number.isNaN(anchor.getTime())) throw new BadRequestException("Invalid plan week");
+    const range = getShanghaiWeekRange(anchor);
+    const monday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(range.start);
+    if (monday !== weekStart) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai");
+    if (range.start.getTime() < getShanghaiWeekRange().start.getTime()) {
+      throw new ForbiddenException("Cannot assign a task into a historical week plan");
+    }
+    return range;
+  }
+
+  /** Used only by the decree-assignment workflow; never exposed as a manual item API. */
+  async addAssignedTasksInTransaction(
+    tx: any,
+    imageTasks: Array<{ id: number; designerId?: number | null }>,
+    designerId: number,
+    userId: number,
+    assignedAt: Date,
+    assignmentType: AssignmentType,
+    weekStart?: string,
+  ) {
+    const range = this.resolveAssignmentRange(weekStart, assignedAt);
+    let plan = await tx.weeklyPlan.findUnique({ where: { weekStart: range.start } });
+    if (!plan) {
+      plan = await tx.weeklyPlan.create({
+        data: { weekStart: range.start, weekEnd: range.end, status: WEEKLY_PLAN_STATUS.DRAFT, createdById: userId },
+      });
+      await this.recordAudit(tx, "weekly_plan_created", userId, plan.id, { weekStart: range.start.toISOString(), createdByAssignment: true });
+    }
+    this.assertMutable(plan);
+    const source = this.sourceForPlan(plan);
+
+    for (const imageTask of imageTasks) {
+      const activeElsewhere = await tx.weeklyPlanItem.findFirst({
+        where: {
+          imageTaskId: imageTask.id,
+          status: { not: WEEKLY_PLAN_ITEM_STATUS.CANCELLED },
+          weeklyPlan: { id: { not: plan.id }, status: { in: [WEEKLY_PLAN_STATUS.DRAFT, WEEKLY_PLAN_STATUS.ACTIVE] } },
+        },
+      });
+      if (activeElsewhere) throw new ForbiddenException("同一图片任务不能同时纳入两个有效周计划");
+
+      const existing = await tx.weeklyPlanItem.findUnique({
+        where: { weeklyPlanId_imageTaskId: { weeklyPlanId: plan.id, imageTaskId: imageTask.id } },
+      });
+      if (!existing) {
+        const item = await tx.weeklyPlanItem.create({
+          data: { weeklyPlanId: plan.id, imageTaskId: imageTask.id, designerId, source, status: WEEKLY_PLAN_ITEM_STATUS.PLANNED, plannedAt: assignedAt },
+        });
+        await this.recordAudit(tx, "weekly_plan_item_added", userId, plan.id, { weeklyPlanItemId: item.id, imageTaskId: imageTask.id, designerId, source });
+      } else if (assignmentType === "REASSIGN" && existing.designerId !== designerId) {
+        await tx.weeklyPlanItem.update({ where: { id: existing.id }, data: { designerId, reassignedAt: assignedAt } });
+        await this.recordAudit(tx, "weekly_plan_item_reassigned", userId, plan.id, { weeklyPlanItemId: existing.id, imageTaskId: imageTask.id, designerId });
+      }
+    }
+    await this.recordAudit(tx, assignmentType === "INITIAL" ? "weekly_plan_decree_assigned" : "weekly_plan_decree_reassigned", userId, plan.id, {
+      weeklyPlanId: plan.id,
+      imageTaskIds: imageTasks.map((item) => item.id),
+      imageCount: imageTasks.length,
+      designerId,
+      weekStart: range.start.toISOString(),
+      source,
+    });
+    return plan;
+  }
+
   private async validateImageTask(tx: any, imageTaskId: number) {
     const imageTask = await tx.imageTask.findUnique({
       where: { id: imageTaskId },
@@ -324,54 +395,6 @@ export class WeeklyPlansService {
       }
     }
     return { total: results.length, successCount: results.filter((item) => item.success).length, failedCount: results.filter((item) => !item.success).length, results };
-  }
-
-  async syncAssignmentInTransaction(
-    tx: any,
-    imageTask: { id: number; designerId?: number | null },
-    newDesignerId: number,
-    userId: number,
-    assignedAt: Date,
-    assignmentType: AssignmentType,
-    includeInWeeklyPlan = true,
-  ) {
-    const range = getShanghaiWeekRange(assignedAt);
-    const plan = await tx.weeklyPlan.findUnique({ where: { weekStart: range.start } });
-    if (!plan) return { state: "NO_PLAN", message: "当前周尚未建立计划" };
-    if (plan.status === WEEKLY_PLAN_STATUS.CLOSED) return { state: "CLOSED", message: "当前周计划已关闭，未自动加入" };
-    if (!includeInWeeklyPlan) return { state: "SKIPPED", message: "已按明确选择不加入本周计划" };
-
-    const existing = await tx.weeklyPlanItem.findUnique({
-      where: { weeklyPlanId_imageTaskId: { weeklyPlanId: plan.id, imageTaskId: imageTask.id } },
-    });
-    if (!existing) {
-      const item = await tx.weeklyPlanItem.create({
-        data: {
-          weeklyPlanId: plan.id,
-          imageTaskId: imageTask.id,
-          designerId: newDesignerId,
-          source: this.sourceForPlan(plan),
-          status: WEEKLY_PLAN_ITEM_STATUS.PLANNED,
-          plannedAt: assignedAt,
-        },
-      });
-      await this.recordAudit(tx, "weekly_plan_item_auto_added", userId, plan.id, {
-        weeklyPlanId: plan.id, weeklyPlanItemId: item.id, imageTaskId: imageTask.id, designerId: newDesignerId, source: item.source,
-      });
-      return { state: "ADDED", weeklyPlanId: plan.id, weeklyPlanItemId: item.id, source: item.source };
-    }
-    if (existing.status === WEEKLY_PLAN_ITEM_STATUS.CANCELLED) {
-      return { state: "CANCELLED_EXISTS", weeklyPlanId: plan.id, weeklyPlanItemId: existing.id, message: "已有已取消计划项，未自动恢复" };
-    }
-    if (assignmentType === "REASSIGN" && existing.designerId !== newDesignerId) {
-      const item = await tx.weeklyPlanItem.update({ where: { id: existing.id }, data: { designerId: newDesignerId, reassignedAt: assignedAt } });
-      await this.recordAudit(tx, "weekly_plan_item_reassigned", userId, plan.id, {
-        weeklyPlanId: plan.id, weeklyPlanItemId: item.id, imageTaskId: imageTask.id, previousDesignerId: existing.designerId,
-        newDesignerId, reassignedById: userId, reassignedAt: assignedAt.toISOString(),
-      });
-      return { state: "REASSIGNED", weeklyPlanId: plan.id, weeklyPlanItemId: item.id };
-    }
-    return { state: "EXISTS", weeklyPlanId: plan.id, weeklyPlanItemId: existing.id };
   }
 
   async completeApprovedImageTaskInTransaction(tx: any, imageTaskId: number, userId: number, approvedAt: Date) {

@@ -38,8 +38,8 @@ describe("ImageTasksService stage A audit writes", () => {
     eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
     workflowEngine = { recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED") };
     weeklyPlans = {
-      syncAssignmentInTransaction: jest.fn().mockResolvedValue({ state: "NO_PLAN" }),
-      completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "NO_ACTIVE_PLAN" }),
+      addAssignedTasksInTransaction: jest.fn().mockResolvedValue({ id: 1 }),
+      completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "COMPLETED" }),
     };
     service = new ImageTasksService(prisma, log, eventBus, workflowEngine, weeklyPlans);
   });
@@ -66,16 +66,16 @@ describe("ImageTasksService stage A audit writes", () => {
       assignedById: 9,
       assignmentType: "INITIAL",
     }));
-    expect(weeklyPlans.syncAssignmentInTransaction).toHaveBeenCalledWith(
+    expect(result).toEqual(expect.objectContaining({ designerId: 7, status: "NOT_STARTED" }));
+    expect(weeklyPlans.addAssignedTasksInTransaction).toHaveBeenCalledWith(
       prisma,
-      expect.objectContaining({ id: 1 }),
+      [expect.objectContaining({ id: 1 })],
       7,
       9,
       expect.any(Date),
       "INITIAL",
-      true,
+      undefined,
     );
-    expect(result).toEqual(expect.objectContaining({ weeklyPlan: { state: "NO_PLAN" } }));
   });
 
   it("writes assignment audit fields for every task in a batch", async () => {
@@ -95,6 +95,15 @@ describe("ImageTasksService stage A audit writes", () => {
       }));
     }
     expect(prisma.auditEvent.create).toHaveBeenCalledTimes(2);
+    expect(weeklyPlans.addAssignedTasksInTransaction).toHaveBeenCalledWith(
+      prisma,
+      expect.arrayContaining([expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 })]),
+      7,
+      9,
+      expect.any(Date),
+      "INITIAL",
+      undefined,
+    );
   });
 
   it("records the previous designer and refreshes assignment fields on reassignment", async () => {
@@ -161,6 +170,7 @@ describe("ImageTasksService stage A audit writes", () => {
         approvedById: null,
       }),
     });
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
   });
 
   it("rolls back the staged assignment when its audit event fails", async () => {

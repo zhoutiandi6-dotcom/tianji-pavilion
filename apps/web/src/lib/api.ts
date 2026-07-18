@@ -111,9 +111,18 @@ export const imageTaskApi = {
   approveReview: (id: number, remark?: string) => api.post("/image-tasks/" + id + "/approve-review", { remark }),
   rejectReview: (id: number, remark?: string) => api.post("/image-tasks/" + id + "/reject-review", { remark }),
   batchAssign: (data: { imageTaskIds: number[]; designerId: number }) => api.post("/image-tasks/batch/assign", data),
-  batchAssignTasks: (data: { taskIds: number[]; designerId: number; mode: "ASSIGN" | "REASSIGN" }) => api.post("/image-tasks/batch/assign-tasks", data),
+  batchAssignTasks: (data: { taskIds: number[]; designerId: number; mode: "ASSIGN" | "REASSIGN"; weekStart?: string }) => api.post("/image-tasks/batch/assign-tasks", data),
   batchReviewTasks: (data: { taskIds: number[]; action: "APPROVE" | "REJECT"; remark?: string }) => api.post("/image-tasks/batch/review-tasks", data),
   remove: (id: number) => api.delete("/image-tasks/" + id),
+};
+
+export const weeklyDesignerPlanApi = {
+  getOverview: (weekStart?: string) => api.get("/weekly-designer-plans", { params: weekStart ? { weekStart } : undefined }),
+  initialize: (weekStart: string) => api.post("/weekly-designer-plans/initialize", { weekStart }),
+  saveTarget: (data: { designerId: number; weekStart: string; targetImageCount: number; reason: string }) => api.post("/weekly-designer-plans", data),
+  getAdjustments: (weekStart?: string) => api.get("/weekly-designer-plans/adjustments", { params: weekStart ? { weekStart } : undefined }),
+  getUnassigned: () => api.get("/weekly-designer-plans/unassigned"),
+  getChanges: (weekStart?: string) => api.get("/weekly-designer-plans/changes", { params: weekStart ? { weekStart } : undefined }),
 };
 
 export const attachmentApi = {

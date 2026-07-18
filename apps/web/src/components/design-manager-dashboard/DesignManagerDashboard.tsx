@@ -146,7 +146,7 @@ export default function DesignManagerDashboard({ data, user }: DashboardProps) {
     : Math.min(100, Math.round(Number(planSummary.completionRate)));
   const today = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(new Date());
 
-  const routeToScope = (scope: 'design-assignment' | 'design-reviews') => router.push(`/dashboard/fazhi?scope=${scope}`);
+  const routeToScope = (scope: 'design-assignment' | 'design-reviews') => router.push(scope === 'design-assignment' ? '/dashboard/weekly-designer-plans?tab=unassigned' : `/dashboard/fazhi?scope=${scope}`);
   const openTask = (task: DashboardTask) => {
     if (!task.id) return routeToScope('design-assignment');
     router.push(`/dashboard/fazhi/${task.id}`);
@@ -186,11 +186,11 @@ export default function DesignManagerDashboard({ data, user }: DashboardProps) {
           {planTotal > 0 ? (
             <div className={styles.planContent}>
               <div className={styles.planRate}><strong>{planRate}%</strong><span>本周计划完成率</span></div>
-              <div className={styles.planProgress}><b>已完成 {planDone} / 当前计划 {planTotal}</b><Progress percent={planRate} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余 {Number(planSummary?.remainingTargetCount || 0)} 张</span></div>
-              <div className={styles.planDetails}><span>本周分配 <b>{Number(planSummary?.assignedCount || 0)} 张</b></span><span>待审核 <b>{Number(planSummary?.pendingReviewCount || 0)} 张</b></span><span>临时任务 <b>{Number(planSummary?.temporaryTaskCount || 0)} 张</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-designer-plans')}>管理本周计划</button></div>
+              <div className={styles.planProgress}><b>已完成 {planDone} / 当前有效图片 {planTotal}</b><Progress percent={planRate} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余 {Number(planSummary?.remainingCount || 0)} 张</span></div>
+              <div className={styles.planDetails}><span>纳入法旨 <b>{Number(planSummary?.decreeCount || 0)} 道</b></span><span>待审核 <b>{Number(planSummary?.pendingReviewCount || 0)} 张</b></span><span>涉及设计师 <b>{Number(planSummary?.designerCount || 0)} 人</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-designer-plans')}>管理本周计划</button></div>
             </div>
           ) : (
-            <div className={styles.noPlan}><strong>尚未设置本周完成目标</strong><span>当前可在计划页面为设计师设置本周目标。</span><Button onClick={() => router.push('/dashboard/weekly-designer-plans')}>管理本周计划</Button></div>
+            <div className={styles.noPlan}><strong>尚未建立本周计划</strong><span>当前待分配：{unassigned} 道法旨，请在本周计划中统一安排。</span><Button onClick={() => router.push('/dashboard/weekly-designer-plans?tab=unassigned')}>管理本周计划</Button></div>
           )}
         </article>
       </section>
@@ -198,12 +198,12 @@ export default function DesignManagerDashboard({ data, user }: DashboardProps) {
       <TrendChart />
 
       <article className={styles.designersCard}>
-        <div className={styles.cardHeading}><div><h2>设计师本周任务进度</h2><span>{planTotal ? '当前周正式计划' : '暂未设置本周目标'}</span></div><span className={styles.dataHint}>数据来自本周目标接口</span></div>
+        <div className={styles.cardHeading}><div><h2>设计师本周任务进度</h2><span>{planTotal ? '当前周已纳入法旨' : '暂未纳入本周法旨'}</span></div><span className={styles.dataHint}>数据来自本周计划接口</span></div>
         {planDesigners.length ? <div className={styles.designerColumns}>{planDesigners.slice(0, 4).map((designer: any) => {
           const target = Number(designer.targetImageCount || 0);
           const done = Number(designer.completedCount || 0);
           const rate = designer.completionRate === null || designer.completionRate === undefined ? null : Math.min(100, Math.round(Number(designer.completionRate)));
-          return <div className={styles.designerColumn} key={designer.designerId}><div><strong>{designer.designerName}</strong><b>{rate === null ? '-' : `${rate}%`}</b></div><span>{target ? `已完成 ${done} / 本周计划 ${target}` : `已分配 ${Number(designer.assignedCount || 0)} 张`}</span><small>{target ? `剩余 ${Number(designer.remainingTargetCount || 0)} 张` : '设置本周目标后显示完成进度'}</small>{rate !== null && <Progress percent={rate} showInfo={false} strokeColor="#111" trailColor="#dfdfdd" />}</div>;
+          return <div className={styles.designerColumn} key={designer.designerId}><div><strong>{designer.designerName}</strong><b>{rate === null ? '-' : `${rate}%`}</b></div><span>{target ? `已完成 ${done} / 当前有效图片 ${target}` : '暂未纳入本周法旨'}</span><small>{target ? `剩余 ${Number(designer.remainingCount || 0)} 张` : '暂未纳入本周法旨'}</small>{rate !== null && <Progress percent={rate} showInfo={false} strokeColor="#111" trailColor="#dfdfdd" />}</div>;
         })}</div> : <div className={styles.emptyWrap}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无在职设计师计划数据" /></div>}
       </article>
 
