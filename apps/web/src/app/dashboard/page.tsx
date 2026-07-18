@@ -23,6 +23,7 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
+import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
 import api from "@/lib/api";
 import Loading from "@/components/Loading";
 import { displayUserName } from "@/lib/display";
@@ -108,6 +109,10 @@ export default function DashboardPage() {
   }, []);
 
   if (loading) return <Loading />;
+
+  if (user?.role === "DESIGN_MANAGER") {
+    return <DesignManagerDashboard data={data} user={user} />;
+  }
 
   const cards = data.cards || [];
   const todoItems = data.todoItems || [];
