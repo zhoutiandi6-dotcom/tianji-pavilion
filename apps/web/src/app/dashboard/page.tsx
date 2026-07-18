@@ -24,6 +24,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
+import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
 import api from "@/lib/api";
 import Loading from "@/components/Loading";
 import { displayUserName } from "@/lib/display";
@@ -112,6 +113,10 @@ export default function DashboardPage() {
 
   if (user?.role === "DESIGN_MANAGER") {
     return <DesignManagerDashboard data={data} user={user} />;
+  }
+
+  if (user?.role === "OPERATION_MANAGER") {
+    return <OperationManagerDashboard user={user} />;
   }
 
   const cards = data.cards || [];
