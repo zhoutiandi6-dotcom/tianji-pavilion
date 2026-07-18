@@ -3,6 +3,7 @@
 
 import { Injectable } from "@nestjs/common";
 import { WorkflowEngine } from "../engine";
+import { RejectTaskDto } from "../../approval/dto/reject-task.dto";
 
 @Injectable()
 export class WorkflowActions {
@@ -20,8 +21,8 @@ export class WorkflowActions {
     return this.engine.approve(taskId, userId, userRole, comment);
   }
 
-  async reject(taskId: number, userId: number, userRole: string, comment?: string) {
-    return this.engine.reject(taskId, userId, userRole, comment);
+  async reject(taskId: number, userId: number, userRole: string, dto: RejectTaskDto) {
+    return this.engine.reject(taskId, userId, userRole, dto.comment, dto);
   }
 
   async rollbackApproval(taskId: number, userId: number, userRole: string) {

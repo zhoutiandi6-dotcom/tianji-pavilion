@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Request, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { ApprovalService } from "./approval.service";
+import { RejectTaskDto } from "./dto/reject-task.dto";
 
 @UseGuards(AuthGuard("jwt"))
 @Controller("tasks/:taskId/approval")
@@ -28,8 +29,8 @@ export class ApprovalController {
   }
 
   @Post("reject")
-  reject(@Param("taskId", ParseIntPipe) taskId: number, @Body("comment") comment: string, @Request() req: any) {
-    return this.service.reject(taskId, req.user.sub, req.user.role, comment);
+  reject(@Param("taskId", ParseIntPipe) taskId: number, @Body() dto: RejectTaskDto, @Request() req: any) {
+    return this.service.reject(taskId, req.user.sub, req.user.role, dto);
   }
 
   @Get("records")

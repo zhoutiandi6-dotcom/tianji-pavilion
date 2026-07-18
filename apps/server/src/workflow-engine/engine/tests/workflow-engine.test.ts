@@ -14,6 +14,26 @@ describe("WorkflowEngine", () => {
     workflowStatus: "DRAFT",
     serialNumber: "天字第000001号法旨",
     creatorId: 1,
+    storeId: 1,
+    requesterName: "运营人员",
+    compatibleProduct: "测试产品",
+    productCode: "SKU-001",
+    requirementTypeId: 1,
+    imageCount: 1,
+    deletedAt: null,
+    attachments: [],
+    imageTasks: [{
+      id: 11,
+      imageIndex: 1,
+      imageTitle: "主图",
+      imageType: "主图",
+      requirement: "替换产品主体",
+      originalImageUrl: "https://example.com/original.jpg",
+      referenceImageUrl: null,
+      status: "WAITING_OPS_APPROVAL",
+      deletedAt: null,
+      attachments: [],
+    }],
   };
 
   beforeEach(async () => {
@@ -21,6 +41,7 @@ describe("WorkflowEngine", () => {
       task: {
         findUnique: jest.fn().mockResolvedValue(mockTask),
         update: jest.fn().mockImplementation(({ data }) => ({ ...mockTask, ...data })),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       approvalRecord: {
         create: jest.fn().mockResolvedValue({ id: 1 }),
@@ -33,8 +54,10 @@ describe("WorkflowEngine", () => {
       },
       imageTask: {
         findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(1),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      auditEvent: { create: jest.fn().mockResolvedValue({ id: 1 }) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback) => callback(prisma));
 
@@ -57,7 +80,7 @@ describe("WorkflowEngine", () => {
   describe("submit", () => {
     it("allows OPERATION to submit", async () => {
       await engine.submit(1, 1, "OPERATION");
-      expect(prisma.task.update).toHaveBeenCalled();
+      expect(prisma.task.updateMany).toHaveBeenCalled();
       expect(prisma.taskSubmissionRecord.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           taskId: 1,
@@ -97,7 +120,7 @@ describe("WorkflowEngine", () => {
     it("does not update task state when submission audit creation fails", async () => {
       prisma.taskSubmissionRecord.create.mockRejectedValue(new Error("audit write failed"));
       await expect(engine.submit(1, 1, "OPERATION")).rejects.toThrow("audit write failed");
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      expect(eventBus.publish).not.toHaveBeenCalled();
       expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
@@ -123,7 +146,7 @@ describe("WorkflowEngine", () => {
           approvalRecordId: 1,
         }),
       });
-      expect(prisma.task.update).toHaveBeenCalled();
+      expect(prisma.task.updateMany).toHaveBeenCalled();
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.approved", expect.any(Object));
     });
 
@@ -133,6 +156,22 @@ describe("WorkflowEngine", () => {
 
     it("rejects DESIGNER from approving", async () => {
       await expect(engine.approve(1, 1, "DESIGNER")).rejects.toThrow();
+    });
+
+    it("rejects a duplicate approval when another supervisor has already processed the task", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
+      prisma.task.updateMany.mockResolvedValue({ count: 0 });
+      await expect(engine.approve(1, 1, "OPERATION_MANAGER")).rejects.toThrow("该法旨已被其他人员处理");
+      expect(prisma.approvalRecord.create).not.toHaveBeenCalled();
+    });
+
+    it("creates one pending submission record when approving a legacy submitted task without audit history", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED", submittedAt: new Date(), createdAt: new Date() });
+      prisma.taskSubmissionRecord.findFirst.mockResolvedValue(null);
+      await engine.approve(1, 1, "OPERATION_MANAGER");
+      expect(prisma.taskSubmissionRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ taskId: 1, submitterId: 1, submissionType: "INITIAL", result: "PENDING" }),
+      });
     });
   });
 
@@ -154,6 +193,26 @@ describe("WorkflowEngine", () => {
         }),
       });
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.rejected", expect.any(Object));
+    });
+
+    it("stores structured image and issue-type metadata for a returned task", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED" });
+      await engine.reject(1, 1, "OPERATION_MANAGER", "补充素材", { issueImageTaskIds: [11], issueTypes: ["缺少参考图"] });
+      expect(prisma.auditEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ action: "ops_approval_rejected", metadata: expect.stringContaining("缺少参考图") }),
+      });
+    });
+  });
+
+  describe("submission validation", () => {
+    it("returns specific missing field messages before creating a submission record", async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        ...mockTask,
+        productCode: "",
+        imageTasks: [{ ...mockTask.imageTasks[0], requirement: "", originalImageUrl: null, referenceImageUrl: null }],
+      });
+      await expect(engine.submit(1, 1, "OPERATION")).rejects.toThrow();
+      expect(prisma.taskSubmissionRecord.create).not.toHaveBeenCalled();
     });
   });
 

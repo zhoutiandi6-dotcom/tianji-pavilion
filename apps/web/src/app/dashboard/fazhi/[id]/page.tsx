@@ -588,16 +588,42 @@ export default function FazhiDetailPage() {
 
   const rejectTask = async () => {
     let comment = "";
+    let issueImageTaskIds: number[] = [];
+    let issueTypes: string[] = [];
+    let modalContentKey: string = "content";
     Modal.confirm({
       title: "退回法旨",
       content: <Input.TextArea rows={3} placeholder="填写退回原因" onChange={(event) => { comment = event.target.value; }} />,
+      ...{
+        [modalContentKey]: (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Input.TextArea rows={3} placeholder="填写退回原因（必填）" onChange={(event) => { comment = event.target.value; }} />
+            <div>
+              <Text strong>问题图片（可多选）</Text>
+              <Checkbox.Group
+                style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}
+                options={(task?.imageTasks || []).map((image: any) => ({ value: image.id, label: `#${image.imageIndex} ${image.imageTitle || image.imageType || "未命名图片"}` }))}
+                onChange={(values) => { issueImageTaskIds = values.map(Number); }}
+              />
+            </div>
+            <div>
+              <Text strong>问题类型（可多选）</Text>
+              <Checkbox.Group
+                style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}
+                options={["需求描述不完整", "缺少参考图", "产品信息不一致", "图片类型不明确", "附件无法使用", "其他"]}
+                onChange={(values) => { issueTypes = values.map(String); }}
+              />
+            </div>
+          </Space>
+        ),
+      },
       onOk: async () => {
         if (!comment.trim()) {
           message.warning("请填写退回原因");
           throw new Error("请填写退回原因");
         }
         try {
-          await taskApi.reject(id, comment.trim());
+          await taskApi.reject(id, { comment: comment.trim(), issueImageTaskIds, issueTypes });
           message.success("已退回运营修改");
           loadTask();
         } catch (err) {
@@ -975,6 +1001,37 @@ export default function FazhiDetailPage() {
 
           </Space>
           </div>
+        </Card>
+      )}
+
+      {(isOpsManager || isOperator || isAdmin) && (
+        <Card title="提交与退回记录" style={{ marginBottom: 16 }}>
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            {(task.submissionRecords || []).map((record: any) => (
+              <div key={`submission-${record.id}`} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <Tag color={record.submissionType === "RESUBMIT" ? "orange" : "blue"}>{record.submissionType === "RESUBMIT" ? "退回后重提" : "首次提交"}</Tag>
+                <Text>第 {record.submissionSequence} 次提交</Text>
+                <Text type="secondary">提交人：{displayUserName(record.submitter)}</Text>
+                <Text type="secondary">提交时间：{record.submittedAt ? new Date(record.submittedAt).toLocaleString("zh-CN") : "-"}</Text>
+                <Tag>{record.result}</Tag>
+              </div>
+            ))}
+            {(task.approvalRecords || []).map((record: any) => (
+              <Alert
+                key={`approval-${record.id}`}
+                type={record.action === "OPS_REJECTED" ? "warning" : "success"}
+                showIcon
+                message={record.action === "OPS_REJECTED" ? "运营主管退回补充" : "运营主管审批放行"}
+                description={`${record.comment || "无备注"} · ${displayUserName(record.approver)} · ${record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "-"}`}
+              />
+            ))}
+            {(task.auditEvents || []).filter((event: any) => event.action === "ops_approval_rejected").map((event: any) => {
+              let metadata: any = {};
+              try { metadata = event.metadata ? JSON.parse(event.metadata) : {}; } catch { metadata = {}; }
+              return <Text key={`return-detail-${event.id}`} type="secondary">问题图片：{(metadata.issueImageTaskIds || []).length ? (metadata.issueImageTaskIds || []).join("、") : "未指定"}；问题类型：{(metadata.issueTypes || []).length ? (metadata.issueTypes || []).join("、") : "未指定"}</Text>;
+            })}
+            {!task.submissionRecords?.length && !task.approvalRecords?.length && <Text type="secondary">暂无提交或退回记录</Text>}
+          </Space>
         </Card>
       )}
 

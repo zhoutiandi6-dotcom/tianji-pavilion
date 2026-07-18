@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/commo
 import { PrismaService } from "../common/prisma.service";
 import { TaskVisibilityService } from "../common/task-visibility.service";
 import { WorkflowActions } from "../workflow-engine/actions";
+import { RejectTaskDto } from "./dto/reject-task.dto";
 
 @Injectable()
 export class ApprovalService {
@@ -23,8 +24,8 @@ export class ApprovalService {
     return this.actions.approve(taskId, userId, userRole, comment);
   }
 
-  async reject(taskId: number, userId: number, userRole: string, comment?: string) {
-    return this.actions.reject(taskId, userId, userRole, comment);
+  async reject(taskId: number, userId: number, userRole: string, dto: RejectTaskDto) {
+    return this.actions.reject(taskId, userId, userRole, dto);
   }
 
   async rollback(taskId: number, userId: number, userRole: string) {

@@ -77,6 +77,7 @@ export default function FazhiListPage() {
   const canAccessDrafts = role === "OPERATION" || isAdmin;
   const isDraftScope = filters.scope === "drafts";
   const isArchivedScope = filters.scope === "archived";
+  const isOpsApprovalScope = filters.scope === "ops-approvals";
   const isSupervisorScope = SUPERVISOR_SCOPES.includes(filters.scope);
   const canExport = ["OPERATION_MANAGER", "DESIGN_MANAGER"].includes(role) || isAdmin;
   const canBatchPriorityRole = ["OPERATION", "OPERATION_MANAGER", "DESIGN_MANAGER"].includes(role) || isAdmin;
@@ -91,6 +92,7 @@ export default function FazhiListPage() {
     if (next.imageGroup) params.set("imageGroup", next.imageGroup);
     if (next.statusGroup) params.set("statusGroup", next.statusGroup);
     if (next.approvalAction) params.set("approvalAction", next.approvalAction);
+    if (next.queueFilter) params.set("queueFilter", next.queueFilter);
     params.set("scope", next.scope || "processing");
     if (next.mine) params.set("mine", next.mine);
     if (next.scope) params.set("scope", next.scope);
@@ -109,7 +111,9 @@ export default function FazhiListPage() {
   const loadData = async (next = filters) => {
     setLoading(true);
     try {
-      const res = await taskApi.findAll(next);
+      const res = next.scope === "ops-approvals"
+        ? await taskApi.findOpsApprovalQueue(next)
+        : await taskApi.findAll(next);
       setData(res.data.data || res.data);
       setSelectedIds([]);
     } catch (err) {
@@ -145,6 +149,7 @@ export default function FazhiListPage() {
       imageGroup: params.get("imageGroup") || undefined,
       statusGroup: params.get("statusGroup") || undefined,
       approvalAction: params.get("approvalAction") || undefined,
+      queueFilter: params.get("queueFilter") || undefined,
       mine: params.get("mine") || undefined,
     };
     setFilters(initialFilters);
@@ -327,6 +332,46 @@ export default function FazhiListPage() {
   const statusOptions = Object.entries(statusLabels)
     .filter(([value]) => isDraftScope ? value === "DRAFT" : isArchivedScope ? ARCHIVE_STATUSES.includes(value) : value !== "DRAFT" && !ARCHIVE_STATUSES.includes(value))
     .map(([value, label]) => ({ value, label }));
+
+  if (isOpsApprovalScope) {
+    const queueItems = data.items || [];
+    const queueSummary = data.summary || {};
+    return (
+      <div>
+        <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
+          <div><Title level={4} style={{ margin: 0 }}>待运营主管审批</Title><Text type="secondary">整单审批放行或退回补充；图片仅用于资料核查，不支持局部放行。</Text></div>
+          <Button onClick={() => router.push("/dashboard")}>返回驾驶舱</Button>
+        </Row>
+        <Card style={{ marginBottom: 16 }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={10}><Input placeholder="搜索法旨编号、店铺、运营需求人、产品编号" prefix={<SearchOutlined />} value={filters.search} onChange={(event) => setFilter({ search: event.target.value })} onPressEnter={search} /></Col>
+            <Col xs={12} md={5}><Select value={filters.queueFilter || "ALL"} style={{ width: "100%" }} onChange={(queueFilter) => applyFilters({ ...filters, queueFilter, page: 1 })} options={[
+              { value: "ALL", label: "全部" }, { value: "INITIAL", label: "首次提交" }, { value: "RESUBMIT", label: "退回后重提" }, { value: "OVERDUE", label: "超时等待" }, { value: "DATA_ISSUE", label: "资料异常" },
+            ]} /></Col>
+            <Col xs={12} md={2}><Button type="primary" onClick={search}>筛选</Button></Col>
+            <Col xs={12} md={2}><Button onClick={() => applyFilters({ page: 1, pageSize: filters.pageSize || 20, scope: "ops-approvals" })}>重置</Button></Col>
+          </Row>
+        </Card>
+        <Card>
+          <Text type="secondary">待审批法旨 {queueSummary.pendingTaskCount ?? data.total ?? 0} 条 · 待审批图片 {queueSummary.pendingImageCount ?? 0} 张</Text>
+          {!queueItems.length && !loading ? <Empty description="暂无待运营主管审批的法旨" style={{ margin: "48px 0" }} /> : <div style={{ overflowX: "auto", marginTop: 14 }}>
+            <div style={{ minWidth: 1160, display: "grid", gridTemplateColumns: "150px 130px 120px 120px 100px 135px 120px 110px", gap: 12, padding: "0 4px 8px", borderBottom: "1px solid #f0f0f0", color: "rgba(0,0,0,.45)", fontSize: 12 }}>
+              <span>法旨编号</span><span>店铺 / 适配产品</span><span>运营需求人</span><span>产品编号</span><span>有效图片</span><span>提交信息</span><span>等待 / 状态</span><span style={{ textAlign: "right" }}>操作</span>
+            </div>
+            {queueItems.map((row: any) => <div key={row.id} style={{ minWidth: 1160, display: "grid", gridTemplateColumns: "150px 130px 120px 120px 100px 135px 120px 110px", gap: 12, alignItems: "center", padding: "12px 4px", borderBottom: "1px solid #f0f0f0", minHeight: 66 }}>
+              <div><Text strong>{row.serialNumber}</Text><Text type="secondary" style={{ display: "block", fontSize: 12 }}>{row.requirementType?.name || "-"}</Text></div>
+              <div><Text>{row.store?.name || "-"}</Text><Text type="secondary" style={{ display: "block", fontSize: 12 }}>{row.compatibleProduct || "-"}</Text></div>
+              <span>{row.requester}</span><span>{row.productCode}</span><span>{row.effectiveImageCount} 张</span>
+              <div><Tag color={row.submissionType === "RESUBMIT" ? "orange" : "blue"}>{row.submissionType === "RESUBMIT" ? "退回后重提" : "首次提交"}</Tag><Text type="secondary" style={{ display: "block", fontSize: 12 }}>{row.latestSubmittedAt ? new Date(row.latestSubmittedAt).toLocaleString("zh-CN") : "-"}</Text></div>
+              <div>{row.isOverdue ? <Tag color="red">等待 {row.waitingHours} 小时</Tag> : <Text>等待 {row.waitingHours} 小时</Text>}{row.dataIssues?.length > 0 && <Text type="danger" style={{ display: "block", fontSize: 12 }}>资料异常 {row.dataIssues.length} 项</Text>}</div>
+              <Space style={{ justifyContent: "flex-end" }}><Button size="small" icon={<EyeOutlined />} onClick={() => router.push(`/dashboard/fazhi/${row.id}`)}>去审批</Button></Space>
+            </div>)}
+          </div>}
+          <div style={{ marginTop: 16, textAlign: "right" }}><Pagination current={filters.page} pageSize={filters.pageSize} total={data.total} showSizeChanger onChange={(page, pageSize) => applyFilters({ ...filters, page, pageSize })} /></div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div>

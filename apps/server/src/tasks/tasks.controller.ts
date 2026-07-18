@@ -15,6 +15,11 @@ export class TasksController {
     return this.service.findAll(Number(query.page || 1), Number(query.pageSize || 20), req.user.role, req.user.sub, query);
   }
 
+  @Get("ops-approval-queue")
+  async findOpsApprovalQueue(@Query() query: any, @Request() req: any) {
+    return this.service.findOpsApprovalQueue(Number(query.page || 1), Number(query.pageSize || 20), req.user.role, query);
+  }
+
   @Post("batch/priority")
   async batchPriority(@Body() dto: BatchPriorityDto, @Request() req: any) {
     return this.service.batchPriority(dto, req.user.sub, req.user.role);

@@ -102,6 +102,117 @@ export class TasksService {
     };
   }
 
+  async findOpsApprovalQueue(page = 1, pageSize = 20, userRole?: string, filters: any = {}) {
+    if (userRole !== "OPERATION_MANAGER" && !ADMIN_ROLES.includes(userRole || "")) {
+      throw new ForbiddenException("当前账号无权访问待运营主管审批列表");
+    }
+
+    const tasks = await this.prisma.task.findMany({
+      where: { deletedAt: null, workflowStatus: "SUBMITTED" },
+      include: {
+        creator: { select: { id: true, username: true, displayName: true } },
+        store: { select: { id: true, name: true } },
+        requirementType: { select: { id: true, name: true } },
+        imageTasks: {
+          where: { deletedAt: null },
+          include: { attachments: { where: { deletedAt: null }, select: { id: true } } },
+          orderBy: { imageIndex: "asc" },
+        },
+        attachments: { where: { deletedAt: null }, select: { id: true } },
+        submissionRecords: {
+          include: { submitter: { select: { id: true, username: true, displayName: true } } },
+          orderBy: { submissionSequence: "asc" },
+        },
+        approvalRecords: {
+          where: { action: "OPS_REJECTED" },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, comment: true, createdAt: true },
+        },
+      },
+    });
+
+    const now = Date.now();
+    const hasText = (value?: string | null) => Boolean(value && value.trim());
+    const items = tasks.map((task: any) => {
+      const activeImages = task.imageTasks.filter((image: any) => image.status !== "CANCELLED");
+      const latestSubmission = task.submissionRecords[task.submissionRecords.length - 1] || null;
+      const firstSubmission = task.submissionRecords[0] || null;
+      const latestSubmittedAt = latestSubmission?.submittedAt || task.submittedAt || task.createdAt;
+      const waitingHours = Math.max(0, Math.floor((now - new Date(latestSubmittedAt).getTime()) / 3_600_000));
+      const taskHasAttachment = task.attachments.length > 0;
+      const dataIssues: string[] = [];
+      if (!task.storeId) dataIssues.push("缺少店铺");
+      if (!hasText(task.requesterName)) dataIssues.push("缺少运营需求人");
+      if (!hasText(task.compatibleProduct)) dataIssues.push("缺少适配产品");
+      if (!hasText(task.productCode)) dataIssues.push("缺少产品编号");
+      if (!task.requirementTypeId) dataIssues.push("缺少需求类型");
+      if (!activeImages.length) dataIssues.push("没有有效图片任务");
+      activeImages.forEach((image: any, index: number) => {
+        const label = `第${image.imageIndex || index + 1}张图片`;
+        if (!hasText(image.imageTitle) && !hasText(image.imageType)) dataIssues.push(`${label}缺少名称或类型`);
+        if (!hasText(image.requirement)) dataIssues.push(`${label}缺少需求描述`);
+        if (!hasText(image.originalImageUrl) && !hasText(image.referenceImageUrl) && !image.attachments.length && !taskHasAttachment) {
+          dataIssues.push(`${label}缺少素材`);
+        }
+      });
+      return {
+        id: task.id,
+        serialNumber: task.serialNumber,
+        store: task.store,
+        requester: task.requesterName || task.creator?.displayName || task.creator?.username || "-",
+        requesterUser: task.creator,
+        compatibleProduct: task.compatibleProduct || task.productName || "-",
+        productCode: task.productCode || "-",
+        requirementType: task.requirementType,
+        effectiveImageCount: activeImages.length,
+        firstSubmittedAt: firstSubmission?.submittedAt || null,
+        latestSubmittedAt,
+        waitingHours,
+        isOverdue: waitingHours >= 24,
+        submissionType: latestSubmission?.submissionType || "INITIAL",
+        submissionCount: task.submissionRecords.length,
+        returnCount: task.approvalRecords.length,
+        latestReturnReason: task.approvalRecords[0]?.comment || null,
+        workflowStatus: task.workflowStatus,
+        dataIssues,
+      };
+    });
+
+    const queueFilter = String(filters.queueFilter || "ALL").toUpperCase();
+    const search = String(filters.search || "").trim().toLowerCase();
+    const filtered = items.filter((item) => {
+      if (queueFilter === "INITIAL" && item.submissionType !== "INITIAL") return false;
+      if (queueFilter === "RESUBMIT" && item.submissionType !== "RESUBMIT") return false;
+      if (queueFilter === "OVERDUE" && !item.isOverdue) return false;
+      if (queueFilter === "DATA_ISSUE" && !item.dataIssues.length) return false;
+      if (!search) return true;
+      return [item.serialNumber, item.store?.name, item.requester, item.productCode]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(search));
+    }).sort((a, b) => {
+      if (Number(b.isOverdue) !== Number(a.isOverdue)) return Number(b.isOverdue) - Number(a.isOverdue);
+      return new Date(a.latestSubmittedAt).getTime() - new Date(b.latestSubmittedAt).getTime();
+    });
+
+    const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+    const safePage = Math.max(Number(page) || 1, 1);
+    const start = (safePage - 1) * safePageSize;
+    return {
+      items: filtered.slice(start, start + safePageSize),
+      total: filtered.length,
+      page: safePage,
+      pageSize: safePageSize,
+      summary: {
+        pendingTaskCount: items.length,
+        pendingImageCount: items.reduce((total, item) => total + item.effectiveImageCount, 0),
+        initialCount: items.filter((item) => item.submissionType === "INITIAL").length,
+        resubmitCount: items.filter((item) => item.submissionType === "RESUBMIT").length,
+        overdueCount: items.filter((item) => item.isOverdue).length,
+        dataIssueCount: items.filter((item) => item.dataIssues.length > 0).length,
+      },
+    };
+  }
+
   async findOne(id: number, userRole?: string, userId?: number) {
     const imageTaskInclude: any = {
       include: { designer: { select: { id: true, username: true, displayName: true } }, attachments: { where: { deletedAt: null }, orderBy: { uploadedAt: "desc" } } },
@@ -119,11 +230,27 @@ export class TasksService {
         requirementType: { select: { id: true, name: true } },
         attachments: { where: { deletedAt: null }, orderBy: { uploadedAt: "desc" } },
         imageTasks: imageTaskInclude,
+        submissionRecords: {
+          include: {
+            submitter: { select: { id: true, username: true, displayName: true } },
+            withdrawnBy: { select: { id: true, username: true, displayName: true } },
+            processedBy: { select: { id: true, username: true, displayName: true } },
+          },
+          orderBy: { submissionSequence: "desc" },
+        },
+        approvalRecords: {
+          include: { approver: { select: { id: true, username: true, displayName: true } } },
+          orderBy: { createdAt: "desc" },
+        },
       },
     });
     if (!task) throw new NotFoundException("法旨不存在");
     if (!this.canView(task, userRole, userId)) throw new ForbiddenException("无权查看该法旨");
-    return task;
+    const auditEvents = await this.prisma.auditEvent.findMany({
+      where: { resourceType: "task", resourceId: id },
+      orderBy: { createdAt: "desc" },
+    });
+    return { ...task, auditEvents };
   }
 
   private canView(task: any, userRole?: string, userId?: number) {
