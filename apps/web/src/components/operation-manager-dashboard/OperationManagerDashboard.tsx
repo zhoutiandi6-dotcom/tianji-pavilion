@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Drawer, Modal, Progress, Tag, message } from 'antd';
+import { Drawer, Progress, Tag, message } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import { DashboardTrendChart } from '@/components/dashboard-workbench/TrendChart';
 import styles from '@/components/design-manager-dashboard/design-manager-dashboard.module.css';
-import { getErrorMessage, taskApi } from '@/lib/api';
+import { getErrorMessage, taskApi, weeklyOperationsApprovalPlanApi } from '@/lib/api';
 import {
   EXCEPTION_TASKS,
   OPERATION_MANAGER_DASHBOARD_META,
@@ -19,18 +19,11 @@ type OpsApprovalQueueItem = {
   serialNumber: string;
   store?: { name?: string | null } | null;
   requester: string;
-  compatibleProduct: string;
   productCode: string;
   effectiveImageCount: number;
   latestSubmittedAt: string;
-  firstSubmittedAt: string | null;
   waitingHours: number;
-  isOverdue: boolean;
   submissionType: 'INITIAL' | 'RESUBMIT';
-  submissionCount: number;
-  returnCount: number;
-  latestReturnReason: string | null;
-  dataIssues: string[];
 };
 
 type QueueSummary = {
@@ -40,6 +33,20 @@ type QueueSummary = {
   resubmitCount: number;
   overdueCount: number;
   dataIssueCount: number;
+};
+
+type ApprovalPlanOverview = {
+  plan: { id: number; targetImageCount: number } | null;
+  summary: {
+    targetImageCount: number;
+    approvedImageCount: number;
+    remainingTargetCount: number;
+    completionRate: number | null;
+    overTargetImageCount: number;
+    adjustmentCount: number;
+    increasedTargetImageCount: number;
+    decreasedTargetImageCount: number;
+  };
 };
 
 type OperationManagerDashboardProps = {
@@ -67,7 +74,8 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
   const [pendingDecrees, setPendingDecrees] = useState<OpsApprovalQueueItem[]>([]);
   const [queueSummary, setQueueSummary] = useState<QueueSummary>(EMPTY_QUEUE_SUMMARY);
   const [queueLoading, setQueueLoading] = useState(true);
-  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [approvalPlan, setApprovalPlan] = useState<ApprovalPlanOverview | null>(null);
+  const [planLoading, setPlanLoading] = useState(true);
   const [personTarget, setPersonTarget] = useState<(typeof OPERATION_QUALITY)[number] | null>(null);
 
   const loadQueue = async () => {
@@ -86,14 +94,26 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
 
   useEffect(() => { void loadQueue(); }, []);
 
-  const approvedCount = 38;
-  const remaining = Math.max(0, 60 - approvedCount);
-  const completionRate = Math.round((approvedCount / 60) * 100);
-  const qualityPendingTotal = useMemo(
-    () => OPERATION_QUALITY.reduce((total, person) => total + person.pending, 0),
-    [],
-  );
+  useEffect(() => {
+    const loadPlan = async () => {
+      setPlanLoading(true);
+      try {
+        const response = await weeklyOperationsApprovalPlanApi.getOverview();
+        setApprovalPlan(response.data?.data || response.data);
+      } catch (error) {
+        message.error(getErrorMessage(error, '本周审批放行计划加载失败'));
+      } finally {
+        setPlanLoading(false);
+      }
+    };
+    void loadPlan();
+  }, []);
 
+  const planSummary = approvalPlan?.summary;
+  const approvedCount = planSummary?.approvedImageCount || 0;
+  const targetCount = planSummary?.targetImageCount || 0;
+  const remaining = planSummary?.remainingTargetCount || 0;
+  const completionRate = planSummary?.completionRate;
   return (
     <div className={styles.root}>
       <header className={styles.pageHeader}>
@@ -124,19 +144,19 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
         </article>
 
         <article className={styles.planCard}>
-          <div className={styles.planTitle}><h2>本周审批放行计划</h2><span>Mock 数据</span></div>
-          <div className={styles.planContent}>
-            <div className={styles.planRate}><strong>{completionRate}%</strong><span>本周放行完成率</span></div>
-            <div className={styles.planProgress}><b>已审批放行 {approvedCount} / 本周计划 60</b><Progress percent={completionRate} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余目标 {remaining} 张</span></div>
-            <div className={styles.planDetails}><span>周中追加 <b>8 张</b></span><span>已取消 <b>4 张</b></span><span>待补充 <b>{qualityPendingTotal} 张</b></span><button type="button" onClick={() => setPlanModalOpen(true)}>管理本周计划</button></div>
-          </div>
+          <div className={styles.planTitle}><h2>本周审批放行计划</h2><span>{planLoading ? '正在加载真实数据' : '真实数据'}</span></div>
+          {!planLoading && !approvalPlan?.plan ? <div className={styles.noPlan}><strong>尚未设置本周计划</strong><span>可先设置本周预计审批放行的有效图片数量。</span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>设置本周计划</button></div> : <div className={styles.planContent}>
+            <div className={styles.planRate}><strong>{completionRate === null || completionRate === undefined ? '未设置' : `${completionRate}%`}</strong><span>本周审批放行完成率</span></div>
+            <div className={styles.planProgress}><b>已审批放行 {approvedCount} / 本周计划 {targetCount}</b><Progress percent={Math.min(completionRate || 0, 100)} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余目标 {remaining} 张{(planSummary?.overTargetImageCount || 0) > 0 ? ` · 超计划 ${planSummary?.overTargetImageCount} 张` : ''}</span></div>
+            <div className={styles.planDetails}><span>计划调整 <b>{planSummary?.adjustmentCount || 0} 次</b></span><span>上调目标 <b>{planSummary?.increasedTargetImageCount || 0} 张</b></span><span>下调目标 <b>{planSummary?.decreasedTargetImageCount || 0} 张</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>管理本周计划</button></div>
+          </div>}
         </article>
       </section>
 
       <DashboardTrendChart title="上周与本周实际审批放行" unitLabel="按天 / 单位：张" previousLabel="上周" currentLabel="本周" data={OPERATION_MANAGER_TREND} />
 
       <article className={styles.designersCard}>
-        <div className={styles.cardHeading}><div><h2>运营人员需求质量</h2><span>一次通过率仅用于质量跟踪，不作绩效排名</span></div><span className={styles.dataHint}>Mock 数据 / 待接真实聚合接口</span></div>
+        <div className={styles.cardHeading}><div><h2>运营人员需求质量</h2><span>一次通过率仅用于质量跟进，不作绩效排名。</span></div><span className={styles.dataHint}>模拟数据 / 待接真实聚合接口</span></div>
         <div className={styles.designerColumns}>{OPERATION_QUALITY.map((person) => {
           const rate = rateFor(person.firstPass, person.submitted);
           return <button key={person.id} type="button" className={styles.designerColumn} style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => setPersonTarget(person)}>
@@ -166,15 +186,11 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
           <div className={styles.taskTable}>
             <div className={styles.reviewHead}><span>状态</span><span>法旨编号</span><span>问题摘要</span><span>运营需求人</span><span>退回 / 等待</span><span>操作</span></div>
             {EXCEPTION_TASKS.map((item) => <div className={styles.reviewRow} key={item.id}>
-              <Tag>Mock</Tag><span>{item.serialNumber}</span><span>{item.summary}</span><span>{item.requester}</span><span>{item.status}</span><button type="button" onClick={() => message.info('预览数据：异常与退回任务尚未接入真实列表')}>查看</button>
+              <Tag>Mock</Tag><span>{item.serialNumber}</span><span>{item.summary}</span><span>{item.requester}</span><span>{item.status}</span><button type="button" onClick={() => message.info('模拟数据：异常与退回任务尚未接入真实列表')}>查看</button>
             </div>)}
           </div>
         </article>
       </section>
-
-      <Modal title="管理本周审批放行计划（预览）" open={planModalOpen} onCancel={() => setPlanModalOpen(false)} footer={<Button type="primary" onClick={() => { setPlanModalOpen(false); message.info('预览模式，数据未写入系统。'); }}>确认预览调整</Button>}>
-        <p>本周计划：60 张</p><p>已审批放行：{approvedCount} 张</p><p>剩余目标：{remaining} 张</p><p>该弹窗仅演示入口和状态反馈，不会写入正式数据。</p>
-      </Modal>
 
       <Drawer title="运营人员本周法旨摘要（预览）" width={420} open={Boolean(personTarget)} onClose={() => setPersonTarget(null)}>
         {personTarget && <><p><strong>{personTarget.name}</strong></p><p>本周提交图片：{personTarget.submitted} 张</p><p>一次通过图片：{personTarget.firstPass} 张</p><p>被退回图片：{personTarget.returned} 张</p><p>待补充图片：{personTarget.pending} 张</p><p>一次通过率：{rateFor(personTarget.firstPass, personTarget.submitted)}%</p></>}

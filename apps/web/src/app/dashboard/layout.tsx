@@ -43,6 +43,7 @@ const getMenuItems = (role: string) => {
       ...common,
       fazhiCenter,
       { key: "/dashboard/fazhi?scope=ops-approvals", icon: <FileTextOutlined />, label: "待我审批" },
+      { key: "/dashboard/weekly-operations-approval-plans", icon: <FileTextOutlined />, label: "本周审批计划" },
       notifications,
     ];
   }

@@ -125,6 +125,13 @@ export const weeklyDesignerPlanApi = {
   getChanges: (weekStart?: string) => api.get("/weekly-designer-plans/changes", { params: weekStart ? { weekStart } : undefined }),
 };
 
+export const weeklyOperationsApprovalPlanApi = {
+  getOverview: (weekStart?: string) => api.get("/weekly-operations-approval-plans", { params: weekStart ? { weekStart } : undefined }),
+  initialize: (weekStart: string) => api.post("/weekly-operations-approval-plans/initialize", { weekStart }),
+  saveTarget: (data: { weekStart: string; targetImageCount: number; reason: string }) => api.post("/weekly-operations-approval-plans", data),
+  getAdjustments: (weekStart?: string) => api.get("/weekly-operations-approval-plans/adjustments", { params: weekStart ? { weekStart } : undefined }),
+};
+
 export const attachmentApi = {
   findByTask: (taskId: number) => api.get("/attachments/by-task/" + taskId),
   findByImageTask: (imageTaskId: number) => api.get("/attachments/by-image-task/" + imageTaskId),

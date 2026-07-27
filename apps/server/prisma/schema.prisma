@@ -81,6 +81,9 @@ model User {
   weeklyDesignerPlans     WeeklyDesignerPlan[] @relation("WeeklyDesignerPlanDesigner")
   weeklyDesignerPlansCreated WeeklyDesignerPlan[] @relation("WeeklyDesignerPlanCreatedBy")
   weeklyDesignerPlanAdjustments WeeklyDesignerPlanAdjustment[] @relation("WeeklyDesignerPlanAdjustmentBy")
+  weeklyOperationsApprovalPlans WeeklyOperationsApprovalPlan[] @relation("WeeklyOperationsApprovalPlanManager")
+  weeklyOperationsApprovalPlansCreated WeeklyOperationsApprovalPlan[] @relation("WeeklyOperationsApprovalPlanCreatedBy")
+  weeklyOperationsApprovalPlanAdjustments WeeklyOperationsApprovalPlanAdjustment[] @relation("WeeklyOperationsApprovalPlanAdjustmentBy")
   operationLogs       OperationLog[]
   uploadedAttachments Attachment[]
   announcements       Announcement[]
@@ -374,6 +377,45 @@ model WeeklyDesignerPlanAdjustment {
   @@index([planId])
   @@index([adjustedAt])
   @@map("weekly_designer_plan_adjustments")
+}
+
+// Per-operations-manager weekly approval-release targets. Completion is derived
+// from OPS_APPROVED approval records and is deliberately never stored here.
+model WeeklyOperationsApprovalPlan {
+  id               Int       @id @default(autoincrement())
+  managerId        Int
+  weekStart        DateTime
+  weekEnd          DateTime
+  targetImageCount Int       @default(0)
+  createdById      Int
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  manager          User      @relation("WeeklyOperationsApprovalPlanManager", fields: [managerId], references: [id], onDelete: Restrict)
+  createdBy        User      @relation("WeeklyOperationsApprovalPlanCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  adjustments      WeeklyOperationsApprovalPlanAdjustment[]
+
+  @@unique([managerId, weekStart])
+  @@index([weekStart])
+  @@index([managerId])
+  @@map("weekly_operations_approval_plans")
+}
+
+model WeeklyOperationsApprovalPlanAdjustment {
+  id             Int       @id @default(autoincrement())
+  planId         Int
+  previousTarget Int
+  newTarget      Int
+  reason         String
+  adjustedById   Int
+  adjustedAt     DateTime  @default(now())
+
+  plan           WeeklyOperationsApprovalPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  adjustedBy     User      @relation("WeeklyOperationsApprovalPlanAdjustmentBy", fields: [adjustedById], references: [id], onDelete: Restrict)
+
+  @@index([planId])
+  @@index([adjustedAt])
+  @@map("weekly_operations_approval_plan_adjustments")
 }
 
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
