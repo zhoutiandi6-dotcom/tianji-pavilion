@@ -36,16 +36,15 @@ type QueueSummary = {
 };
 
 type ApprovalPlanOverview = {
-  plan: { id: number; targetImageCount: number } | null;
+  plan: { id: number } | null;
   summary: {
-    targetImageCount: number;
+    plannedImageCount: number;
+    plannedDecreeCount: number;
     approvedImageCount: number;
-    remainingTargetCount: number;
+    remainingImageCount: number;
     completionRate: number | null;
-    overTargetImageCount: number;
-    adjustmentCount: number;
-    increasedTargetImageCount: number;
-    decreasedTargetImageCount: number;
+    midweekAdditionImageCount: number;
+    cancelledImageCount: number;
   };
 };
 
@@ -111,8 +110,9 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
 
   const planSummary = approvalPlan?.summary;
   const approvedCount = planSummary?.approvedImageCount || 0;
-  const targetCount = planSummary?.targetImageCount || 0;
-  const remaining = planSummary?.remainingTargetCount || 0;
+  const targetCount = planSummary?.plannedImageCount || 0;
+  const decreeCount = planSummary?.plannedDecreeCount || 0;
+  const remaining = planSummary?.remainingImageCount || 0;
   const completionRate = planSummary?.completionRate;
   return (
     <div className={styles.root}>
@@ -145,10 +145,10 @@ export default function OperationManagerDashboard({ user }: OperationManagerDash
 
         <article className={styles.planCard}>
           <div className={styles.planTitle}><h2>本周审批放行计划</h2><span>{planLoading ? '正在加载真实数据' : '真实数据'}</span></div>
-          {!planLoading && !approvalPlan?.plan ? <div className={styles.noPlan}><strong>尚未设置本周计划</strong><span>可先设置本周预计审批放行的有效图片数量。</span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>设置本周计划</button></div> : <div className={styles.planContent}>
+          {!planLoading && !approvalPlan?.plan ? <div className={styles.noPlan}><strong>尚未建立本周计划</strong><span>选择待审批法旨后，系统会自动汇总其有效图片数量。</span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>添加法旨到本周计划</button></div> : <div className={styles.planContent}>
             <div className={styles.planRate}><strong>{completionRate === null || completionRate === undefined ? '未设置' : `${completionRate}%`}</strong><span>本周审批放行完成率</span></div>
-            <div className={styles.planProgress}><b>已审批放行 {approvedCount} / 本周计划 {targetCount}</b><Progress percent={Math.min(completionRate || 0, 100)} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余目标 {remaining} 张{(planSummary?.overTargetImageCount || 0) > 0 ? ` · 超计划 ${planSummary?.overTargetImageCount} 张` : ''}</span></div>
-            <div className={styles.planDetails}><span>计划调整 <b>{planSummary?.adjustmentCount || 0} 次</b></span><span>上调目标 <b>{planSummary?.increasedTargetImageCount || 0} 张</b></span><span>下调目标 <b>{planSummary?.decreasedTargetImageCount || 0} 张</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>管理本周计划</button></div>
+            <div className={styles.planProgress}><b>已审批放行 {approvedCount} / 当前计划 {targetCount}</b><Progress percent={Math.min(completionRate || 0, 100)} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>剩余计划 {remaining} 张 · 涉及法旨 {decreeCount} 条</span></div>
+            <div className={styles.planDetails}><span>周中追加 <b>{planSummary?.midweekAdditionImageCount || 0} 张</b></span><span>已取消 <b>{planSummary?.cancelledImageCount || 0} 张</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-operations-approval-plans')}>管理本周计划</button></div>
           </div>}
         </article>
       </section>

@@ -6,6 +6,7 @@ import { CreateTaskDto } from "./dto/create-task.dto";
 import { UpdateTaskDto } from "./dto/update-task.dto";
 import { BatchPriorityDto } from "./dto/batch-priority.dto";
 import { ADMIN_ROLES, DESIGN_VISIBLE_STATUSES, TaskVisibilityService } from "../common/task-visibility.service";
+import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
 
 const EDITABLE_BY_OPERATOR = ["DRAFT", "OPS_REJECTED"];
 
@@ -16,6 +17,7 @@ export class TasksService {
     private log: OperationLogService,
     private engine: WorkflowEngine,
     private visibility: TaskVisibilityService,
+    private operationsApprovalPlans: WeeklyOperationsApprovalPlansService,
   ) {}
 
   async genSerial(): Promise<string> {
@@ -423,6 +425,7 @@ export class TasksService {
           }
           await tx.imageTask.deleteMany({ where: { id: { in: candidates.map((imageTask: any) => imageTask.id) } } });
         }
+        await this.operationsApprovalPlans.refreshPendingDecreeSnapshotInTransaction(tx, id, userId, "task_image_count_updated");
       }
       return result;
     });

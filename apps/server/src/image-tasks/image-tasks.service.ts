@@ -16,6 +16,7 @@ import { BatchAssignImageTasksDto } from "./dto/batch-assign-image-tasks.dto";
 import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
+import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
 
 const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
 const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
@@ -29,6 +30,7 @@ export class ImageTasksService {
     private eventBus: EventBus,
     private workflowEngine: WorkflowEngine,
     private weeklyPlans: WeeklyPlansService,
+    private operationsApprovalPlans: WeeklyOperationsApprovalPlansService,
   ) {}
 
   async create(dto: CreateImageTaskDto, userId: number) {
@@ -65,6 +67,7 @@ export class ImageTasksService {
         },
       });
       await tx.task.update({ where: { id: dto.taskId }, data: { imageCount: imageIndex } });
+      await this.operationsApprovalPlans.refreshPendingDecreeSnapshotInTransaction(tx, dto.taskId, userId, "image_task_created");
       return created;
     });
 
@@ -415,7 +418,11 @@ export class ImageTasksService {
         }
       }
       const { weekStart: _weekStart, ...imageTaskData } = dto;
-      const result = await this.prisma.imageTask.update({ where: { id }, data: imageTaskData });
+      const result = await this.prisma.$transaction(async (tx: any) => {
+        const updated = await tx.imageTask.update({ where: { id }, data: imageTaskData });
+        await this.operationsApprovalPlans.refreshPendingDecreeSnapshotInTransaction(tx, imageTask.taskId, userId, "image_task_updated");
+        return updated;
+      });
       await this.log.log({
         userId,
         action: "edit_image_task",
@@ -448,7 +455,10 @@ export class ImageTasksService {
     if (!EDITABLE_TASK_STATUS.includes(imageTask.task.workflowStatus)) {
       throw new ForbiddenException("Image tasks can only be deleted while the task is draft or rejected");
     }
-    await this.prisma.imageTask.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.imageTask.delete({ where: { id } });
+      await this.operationsApprovalPlans.refreshPendingDecreeSnapshotInTransaction(tx, imageTask.taskId, userId, "image_task_deleted");
+    });
     await this.log.log({
       userId,
       action: "delete_image_task",

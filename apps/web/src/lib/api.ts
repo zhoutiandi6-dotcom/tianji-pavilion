@@ -128,8 +128,9 @@ export const weeklyDesignerPlanApi = {
 export const weeklyOperationsApprovalPlanApi = {
   getOverview: (weekStart?: string) => api.get("/weekly-operations-approval-plans", { params: weekStart ? { weekStart } : undefined }),
   initialize: (weekStart: string) => api.post("/weekly-operations-approval-plans/initialize", { weekStart }),
-  saveTarget: (data: { weekStart: string; targetImageCount: number; reason: string }) => api.post("/weekly-operations-approval-plans", data),
-  getAdjustments: (weekStart?: string) => api.get("/weekly-operations-approval-plans/adjustments", { params: weekStart ? { weekStart } : undefined }),
+  getCandidates: (weekStart: string, search?: string) => api.get("/weekly-operations-approval-plans/candidates", { params: { weekStart, search } }),
+  addDecrees: (data: { weekStart: string; decreeIds: number[] }) => api.post("/weekly-operations-approval-plans/items", data),
+  removeItem: (itemId: number, reason: string) => api.post(`/weekly-operations-approval-plans/items/${itemId}/remove`, { reason }),
 };
 
 export const attachmentApi = {

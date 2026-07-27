@@ -3,6 +3,7 @@ import { WorkflowEngine } from "../index";
 import { PrismaService } from "../../../common/prisma.service";
 import { EventBus } from "../../../event-bus/event-bus";
 import { OperationLogService } from "../../../operation-log/operation-log.service";
+import { WeeklyOperationsApprovalPlansService } from "../../../weekly-plans/weekly-operations-approval-plans.service";
 
 describe("WorkflowEngine", () => {
   let engine: WorkflowEngine;
@@ -71,6 +72,7 @@ describe("WorkflowEngine", () => {
         { provide: PrismaService, useValue: prisma },
         { provide: EventBus, useValue: eventBus },
         { provide: OperationLogService, useValue: { log: jest.fn() } },
+        { provide: WeeklyOperationsApprovalPlansService, useValue: { ensureAutoAddedInTransaction: jest.fn().mockResolvedValue({ added: true }) } },
       ],
     }).compile();
 

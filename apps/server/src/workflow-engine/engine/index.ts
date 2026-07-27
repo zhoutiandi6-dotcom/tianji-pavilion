@@ -8,6 +8,7 @@ import {
   WorkflowSubmitted, WorkflowWithdrawn,
 } from "../../domain-events";
 import { SUBMISSION_RESULT, SUBMISSION_TYPE } from "../submission-audit";
+import { WeeklyOperationsApprovalPlansService } from "../../weekly-plans/weekly-operations-approval-plans.service";
 
 export interface WorkflowActionResult {
   task: any;
@@ -28,6 +29,7 @@ export class WorkflowEngine {
     private prisma: PrismaService,
     private eventBus: EventBus,
     private logService: OperationLogService,
+    private operationsApprovalPlans: WeeklyOperationsApprovalPlansService,
   ) {}
 
   private async getTask(taskId: number) {
@@ -221,6 +223,7 @@ export class WorkflowEngine {
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const activeImageCount = await tx.imageTask.count({ where: { taskId, deletedAt: null, status: { not: "CANCELLED" } } });
       if (!activeImageCount) throw new BadRequestException("法旨不存在有效图片任务，无法审批放行");
+      const autoPlan = await this.operationsApprovalPlans.ensureAutoAddedInTransaction(tx, taskId, userId, processedAt);
       const stateUpdated = await tx.task.updateMany({
         where: { id: taskId, workflowStatus: TASK_WORKFLOW_STATUS.SUBMITTED, deletedAt: null },
         data: {
@@ -253,7 +256,7 @@ export class WorkflowEngine {
           action: "ops_approval_approved",
           operatorId: userId,
           correlationId: `task_${taskId}`,
-          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, effectiveImageCount: activeImageCount, processedAt, legacySubmissionRecovered: legacyRecovered }),
+          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, effectiveImageCount: activeImageCount, processedAt, legacySubmissionRecovered: legacyRecovered, autoPlan }),
         },
       });
       return tx.task.findUnique({ where: { id: taskId } });

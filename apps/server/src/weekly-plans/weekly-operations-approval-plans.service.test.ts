@@ -1,104 +1,100 @@
-import { ForbiddenException } from "@nestjs/common";
+import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { getShanghaiWeekRange } from "../common/shanghai-time";
 import { WeeklyOperationsApprovalPlansService } from "./weekly-operations-approval-plans.service";
 
 describe("WeeklyOperationsApprovalPlansService", () => {
   let prisma: any;
   let service: WeeklyOperationsApprovalPlansService;
-
-  const currentWeek = () => getShanghaiWeekRange();
   const formatWeekStart = (range: { start: Date }) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(range.start);
-  const currentWeekStart = () => formatWeekStart(currentWeek());
-  const nextWeekStart = () => formatWeekStart(getShanghaiWeekRange(new Date(currentWeek().start.getTime() + 7 * 24 * 60 * 60 * 1000)));
+  const currentWeekStart = () => formatWeekStart(getShanghaiWeekRange());
+  const nextWeekStart = () => formatWeekStart(getShanghaiWeekRange(new Date(getShanghaiWeekRange().start.getTime() + 7 * 86400000)));
 
   beforeEach(() => {
     prisma = {
-      weeklyOperationsApprovalPlan: {
-        findUnique: jest.fn(),
-        create: jest.fn().mockImplementation(({ data }: any) => ({ id: 41, ...data, createdAt: new Date(), updatedAt: new Date() })),
-        update: jest.fn().mockImplementation(({ data }: any) => ({ id: 41, ...data, createdAt: new Date(), updatedAt: new Date() })),
-      },
-      weeklyOperationsApprovalPlanAdjustment: { create: jest.fn().mockResolvedValue({ id: 1 }), findMany: jest.fn().mockResolvedValue([]) },
-      approvalRecord: { findMany: jest.fn().mockResolvedValue([]) },
-      imageTask: { count: jest.fn().mockResolvedValue(0) },
+      weeklyOperationsApprovalPlan: { findUnique: jest.fn(), create: jest.fn().mockImplementation(({ data }: any) => ({ id: 41, ...data, createdAt: new Date(), updatedAt: new Date() })) },
+      weeklyOperationsApprovalPlanItem: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn(), count: jest.fn().mockResolvedValue(0), createMany: jest.fn().mockResolvedValue({ count: 2 }), create: jest.fn().mockResolvedValue({ id: 51 }), update: jest.fn().mockResolvedValue({ id: 51 }) },
+      task: { findMany: jest.fn().mockResolvedValue([]) },
+      imageTask: { count: jest.fn().mockResolvedValue(6) },
       auditEvent: { create: jest.fn().mockResolvedValue({ id: 1 }) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     service = new WeeklyOperationsApprovalPlansService(prisma);
   });
 
-  it("creates a current-week zero target plan for an operations manager", async () => {
+  it("creates an empty current-week container without a manual target", async () => {
     prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue(null);
-
     const result = await service.initializeWeek(currentWeekStart(), 9, "OPERATION_MANAGER");
-
-    expect(result).toEqual(expect.objectContaining({ created: true }));
-    expect(prisma.weeklyOperationsApprovalPlan.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ managerId: 9, targetImageCount: 0, createdById: 9 }),
-    });
+    expect(result.created).toBe(true);
+    expect(prisma.weeklyOperationsApprovalPlan.create).toHaveBeenCalledWith({ data: expect.objectContaining({ managerId: 9, createdById: 9 }) });
+    expect(prisma.weeklyOperationsApprovalPlan.create.mock.calls[0][0].data).not.toHaveProperty("targetImageCount");
   });
 
-  it("creates a next-week target without changing the current plan", async () => {
+  it("adds two whole decrees and snapshots their six plus five active images", async () => {
     prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue(null);
-
-    await service.upsertTarget({ weekStart: nextWeekStart(), targetImageCount: 60, reason: "下周审批计划" }, 9, "OPERATION_MANAGER");
-
-    expect(prisma.weeklyOperationsApprovalPlan.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ managerId: 9, targetImageCount: 60, createdById: 9 }),
-    });
+    prisma.task.findMany.mockResolvedValue([{ id: 11 }, { id: 12 }]);
+    prisma.imageTask.count.mockResolvedValueOnce(6).mockResolvedValueOnce(5);
+    const result = await service.addDecrees({ weekStart: nextWeekStart(), decreeIds: [11, 12] }, 9, "OPERATION_MANAGER");
+    expect(result).toEqual(expect.objectContaining({ addedDecreeCount: 2, addedImageCount: 11, sourceType: "INITIAL_PLAN" }));
+    expect(prisma.weeklyOperationsApprovalPlanItem.createMany).toHaveBeenCalledWith({ data: expect.arrayContaining([expect.objectContaining({ decreeId: 11, plannedImageCountSnapshot: 6 }), expect.objectContaining({ decreeId: 12, plannedImageCountSnapshot: 5 })]) });
   });
 
-  it("records every current-week target adjustment", async () => {
-    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41, managerId: 9, targetImageCount: 60 });
-
-    await service.upsertTarget({ weekStart: currentWeekStart(), targetImageCount: 70, reason: "周中增加放行目标" }, 9, "OPERATION_MANAGER");
-
-    expect(prisma.weeklyOperationsApprovalPlanAdjustment.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ planId: 41, previousTarget: 60, newTarget: 70, adjustedById: 9 }),
-    });
+  it("does not allow a decree to enter two active weekly plans", async () => {
+    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
+    prisma.weeklyOperationsApprovalPlanItem.findMany.mockImplementationOnce(() => []).mockImplementationOnce(() => [{ decreeId: 11, planId: 99 }]);
+    prisma.task.findMany.mockResolvedValue([{ id: 11 }]);
+    await expect(service.addDecrees({ weekStart: currentWeekStart(), decreeIds: [11] }, 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it("keeps historical weeks read-only and blocks non-manager roles", async () => {
-    await expect(service.upsertTarget({ weekStart: "2020-01-06", targetImageCount: 60, reason: "历史修改" }, 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
+  it("uses MIDWEEK_ADDITION for subsequent current-week additions", async () => {
+    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
+    prisma.weeklyOperationsApprovalPlanItem.count.mockResolvedValue(1);
+    prisma.task.findMany.mockResolvedValue([{ id: 11 }]);
+    prisma.imageTask.count.mockResolvedValue(6);
+    await service.addDecrees({ weekStart: currentWeekStart(), decreeIds: [11] }, 9, "OPERATION_MANAGER");
+    expect(prisma.weeklyOperationsApprovalPlanItem.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({ sourceType: "MIDWEEK_ADDITION" })] });
+  });
+
+  it("auto-adds an approved decree in the same transaction with AUTO_ADDITION", async () => {
+    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
+    prisma.imageTask.count.mockResolvedValue(6);
+    const result = await service.ensureAutoAddedInTransaction(prisma, 11, 9, new Date());
+    expect(result).toEqual(expect.objectContaining({ added: true, imageCount: 6 }));
+    expect(prisma.weeklyOperationsApprovalPlanItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ decreeId: 11, sourceType: "AUTO_ADDITION", plannedImageCountSnapshot: 6 }) });
+  });
+
+  it("refreshes pending item snapshots and writes an audit event when effective image count changes", async () => {
+    prisma.weeklyOperationsApprovalPlanItem.findMany.mockResolvedValue([{
+      id: 51,
+      planId: 41,
+      plannedImageCountSnapshot: 3,
+      decree: { deletedAt: null, approvalRecords: [] },
+    }]);
+    prisma.imageTask.count.mockResolvedValue(4);
+
+    const result = await service.refreshPendingDecreeSnapshotInTransaction(prisma, 11, 9, "image_task_created");
+
+    expect(result).toEqual({ updatedItemIds: [51], imageCount: 4 });
+    expect(prisma.weeklyOperationsApprovalPlanItem.update).toHaveBeenCalledWith({ where: { id: 51 }, data: { plannedImageCountSnapshot: 4 } });
+    expect(JSON.parse(prisma.auditEvent.create.mock.calls[0][0].data.metadata)).toEqual(expect.objectContaining({ previousImageCount: 3, newImageCount: 4, reason: "image_task_created" }));
+  });
+
+  it("keeps an approved decree snapshot frozen after later image changes", async () => {
+    prisma.weeklyOperationsApprovalPlanItem.findMany.mockResolvedValue([{
+      id: 51,
+      planId: 41,
+      plannedImageCountSnapshot: 3,
+      decree: { deletedAt: null, approvalRecords: [{ id: 1 }] },
+    }]);
+    prisma.imageTask.count.mockResolvedValue(4);
+
+    const result = await service.refreshPendingDecreeSnapshotInTransaction(prisma, 11, 9, "image_task_updated");
+
+    expect(result).toEqual({ updatedItemIds: [], imageCount: 4 });
+    expect(prisma.weeklyOperationsApprovalPlanItem.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps historical weeks and non-manager roles read-only", async () => {
+    await expect(service.addDecrees({ weekStart: "2020-01-06", decreeIds: [11] }, 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.getWeekOverview(7, "OPERATION")).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it("counts each approved decree only once and sums its valid image tasks", async () => {
-    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({
-      id: 41,
-      managerId: 9,
-      targetImageCount: 6,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      adjustments: [],
-    });
-    prisma.approvalRecord.findMany.mockResolvedValue([{ taskId: 11 }, { taskId: 11 }, { taskId: 12 }]);
-    prisma.imageTask.count.mockResolvedValue(6);
-
-    const result = await service.getWeekOverview(9, "OPERATION_MANAGER", currentWeekStart());
-
-    expect(prisma.imageTask.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ taskId: { in: [11, 12] }, deletedAt: null }) }));
-    expect(result.summary).toEqual(expect.objectContaining({ approvedTaskCount: 2, approvedImageCount: 6, remainingTargetCount: 0, completionRate: 100 }));
-  });
-
-  it("does not divide by zero and permits completion over plan", async () => {
-    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41, managerId: 9, targetImageCount: 0, createdAt: new Date(), updatedAt: new Date(), adjustments: [] });
-    prisma.approvalRecord.findMany.mockResolvedValue([{ taskId: 11 }]);
-    prisma.imageTask.count.mockResolvedValue(6);
-
-    const zeroTarget = await service.getWeekOverview(9, "OPERATION_MANAGER", currentWeekStart());
-    expect(zeroTarget.summary).toEqual(expect.objectContaining({ completionRate: null, overTargetImageCount: 6 }));
-
-    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41, managerId: 9, targetImageCount: 4, createdAt: new Date(), updatedAt: new Date(), adjustments: [] });
-    const overTarget = await service.getWeekOverview(9, "OPERATION_MANAGER", currentWeekStart());
-    expect(overTarget.summary).toEqual(expect.objectContaining({ completionRate: 150, overTargetImageCount: 2 }));
-  });
-
-  it("returns only the current manager's adjustment history", async () => {
-    await service.getAdjustments(9, "OPERATION_MANAGER", currentWeekStart());
-
-    expect(prisma.weeklyOperationsApprovalPlanAdjustment.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ plan: expect.objectContaining({ managerId: 9 }) }),
-    }));
   });
 });

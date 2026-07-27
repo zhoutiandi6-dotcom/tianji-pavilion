@@ -7,6 +7,7 @@ describe("ImageTasksService stage A audit writes", () => {
   let eventBus: any;
   let workflowEngine: any;
   let weeklyPlans: any;
+  let operationsApprovalPlans: any;
 
   const imageTask = (overrides: Record<string, any> = {}) => ({
     id: 1,
@@ -41,7 +42,8 @@ describe("ImageTasksService stage A audit writes", () => {
       addAssignedTasksInTransaction: jest.fn().mockResolvedValue({ id: 1 }),
       completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "COMPLETED" }),
     };
-    service = new ImageTasksService(prisma, log, eventBus, workflowEngine, weeklyPlans);
+    operationsApprovalPlans = { refreshPendingDecreeSnapshotInTransaction: jest.fn().mockResolvedValue({ updatedItemIds: [] }) };
+    service = new ImageTasksService(prisma, log, eventBus, workflowEngine, weeklyPlans, operationsApprovalPlans);
   });
 
   it("writes assignedAt and assignedById for a single initial assignment", async () => {
