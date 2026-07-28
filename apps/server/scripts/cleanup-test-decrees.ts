@@ -60,10 +60,16 @@ function assertDevelopmentDatabase() {
 }
 
 async function buildScope(): Promise<CleanupScope> {
-  // The E2E product-code prefix is the only approved deletion marker. Similar
-  // looking manual records are deliberately excluded and reported as out of scope.
+  // The E2E product-code prefix is the only approved deletion marker. Final
+  // validation decrees use E2E-FINAL- and are retained until a separate task
+  // explicitly defines their cleanup scope.
   const tasks = await prisma.task.findMany({
-    where: { productCode: { startsWith: "E2E-" } },
+    where: {
+      AND: [
+        { productCode: { startsWith: "E2E-" } },
+        { NOT: { productCode: { startsWith: "E2E-FINAL-" } } },
+      ],
+    },
     select: {
       id: true,
       serialNumber: true,
@@ -150,7 +156,7 @@ async function buildScope(): Promise<CleanupScope> {
 function printDryRun(scope: CleanupScope) {
   console.log("\n=== Test decree cleanup: DRY RUN ===");
   console.log(`Database: ${databasePath}`);
-  console.log("Deletion marker: productCode starts with E2E-");
+  console.log("Deletion marker: productCode starts with E2E-, excluding retained E2E-FINAL- validation decrees");
   console.log("Candidate decrees:");
   for (const task of scope.tasks) {
     console.log(
