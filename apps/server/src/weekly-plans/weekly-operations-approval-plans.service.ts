@@ -174,6 +174,68 @@ export class WeeklyOperationsApprovalPlansService {
     });
   }
 
+  async moveDecreeItem(itemId: number, weekStart: string, reason: string, userId: number, role: string) {
+    this.assertManager(role);
+    if (!reason?.trim()) throw new BadRequestException("Move reason is required");
+    const targetRange = this.resolveRange(weekStart);
+    this.assertWritableRange(targetRange);
+    return this.prisma.$transaction(async (tx: any) => {
+      const item = await tx.weeklyOperationsApprovalPlanItem.findUnique({
+        where: { id: itemId },
+        include: { plan: true, decree: { include: { approvalRecords: { where: { action: "OPS_APPROVED" }, select: { id: true } } } } },
+      });
+      if (!item || item.plan.managerId !== userId) throw new NotFoundException("Plan item not found");
+      this.assertWritableRange({ start: item.plan.weekStart, end: item.plan.weekEnd });
+      if (item.removedAt) throw new ConflictException("Plan item has already been removed");
+      if (item.decree.approvalRecords.length || item.decree.workflowStatus === "OPS_APPROVED") {
+        throw new BadRequestException("Approved decrees cannot be moved between plan weeks");
+      }
+      if (item.plan.weekStart.getTime() === targetRange.start.getTime()) {
+        throw new BadRequestException("Decree is already arranged for this plan week");
+      }
+
+      const activeInTarget = await tx.weeklyOperationsApprovalPlanItem.findFirst({
+        where: { decreeId: item.decreeId, removedAt: null, plan: { weekStart: targetRange.start } },
+        select: { id: true },
+      });
+      if (activeInTarget) throw new ConflictException("Decree is already in the destination plan week");
+
+      const { plan: targetPlan } = await this.getOrCreatePlan(tx, targetRange, userId, userId);
+      const movedAt = new Date();
+      const imageCount = await this.activeImageCount(tx, item.decreeId);
+      if (!imageCount) throw new BadRequestException("Decree has no active image tasks");
+      const removedReason = `Moved to ${this.formatShanghaiDate(targetRange.start)}: ${reason.trim()}`;
+      const sourceUpdate = await tx.weeklyOperationsApprovalPlanItem.updateMany({
+        where: { id: item.id, removedAt: null },
+        data: { removedAt: movedAt, removedById: userId, removedReason },
+      });
+      if (sourceUpdate.count !== 1) throw new ConflictException("Plan item changed by another operator");
+
+      const existingDestination = await tx.weeklyOperationsApprovalPlanItem.findUnique({
+        where: { planId_decreeId: { planId: targetPlan.id, decreeId: item.decreeId } },
+      });
+      const sourceType = this.sourceFor(targetRange, await tx.weeklyOperationsApprovalPlanItem.count({ where: { planId: targetPlan.id, removedAt: null } }));
+      const destination = existingDestination
+        ? await tx.weeklyOperationsApprovalPlanItem.update({
+            where: { id: existingDestination.id },
+            data: { plannedImageCountSnapshot: imageCount, sourceType, addedById: userId, addedAt: movedAt, removedAt: null, removedById: null, removedReason: null },
+          })
+        : await tx.weeklyOperationsApprovalPlanItem.create({
+            data: { planId: targetPlan.id, decreeId: item.decreeId, plannedImageCountSnapshot: imageCount, sourceType, addedById: userId, addedAt: movedAt },
+          });
+      await tx.auditEvent.create({
+        data: {
+          resourceType: "weekly_operations_approval_plan_item",
+          resourceId: destination.id,
+          action: "weekly_operations_approval_plan_item_moved",
+          operatorId: userId,
+          metadata: JSON.stringify({ decreeId: item.decreeId, sourceItemId: item.id, destinationItemId: destination.id, fromWeekStart: item.plan.weekStart.toISOString(), toWeekStart: targetRange.start.toISOString(), imageCount, reason: reason.trim(), movedAt: movedAt.toISOString() }),
+        },
+      });
+      return { itemId: destination.id, fromWeekStart: item.plan.weekStart, toWeekStart: targetRange.start, movedAt };
+    });
+  }
+
   async ensureAutoAddedInTransaction(tx: any, decreeId: number, managerId: number, approvedAt: Date) {
     const range = getShanghaiWeekRange(approvedAt);
     const activeMembership = await tx.weeklyOperationsApprovalPlanItem.findFirst({ where: { decreeId, removedAt: null }, select: { id: true, planId: true } });

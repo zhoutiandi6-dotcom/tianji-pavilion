@@ -71,6 +71,11 @@ export class WeeklyDesignerPlansService {
     this.assertWritableRange(range);
     const designers = await this.activeDesigners();
     const result = await this.prisma.$transaction(async (tx: any) => {
+      const weeklyPlan = await tx.weeklyPlan.upsert({
+        where: { weekStart: range.start },
+        create: { weekStart: range.start, weekEnd: range.end, status: "DRAFT", createdById: userId },
+        update: {},
+      });
       const created: number[] = [];
       for (const designer of designers) {
         const existing = await tx.weeklyDesignerPlan.findUnique({
@@ -83,9 +88,9 @@ export class WeeklyDesignerPlansService {
           created.push(plan.id);
         }
       }
-      return created;
+      return { created, weeklyPlan };
     });
-    return { weekStart: range.start, weekEnd: range.end, createdCount: result.length, designerCount: designers.length };
+    return { weekStart: range.start, weekEnd: range.end, createdCount: result.created.length, designerCount: designers.length, weeklyPlanId: result.weeklyPlan.id };
   }
 
   async upsertTarget(dto: UpsertWeeklyDesignerPlanDto, userId: number, role: string) {
@@ -96,6 +101,11 @@ export class WeeklyDesignerPlansService {
     const reason = dto.reason.trim();
     const target = Number(dto.targetImageCount);
     return this.prisma.$transaction(async (tx: any) => {
+      await tx.weeklyPlan.upsert({
+        where: { weekStart: range.start },
+        create: { weekStart: range.start, weekEnd: range.end, status: "DRAFT", createdById: userId },
+        update: {},
+      });
       const existing = await tx.weeklyDesignerPlan.findUnique({
         where: { designerId_weekStart: { designerId: dto.designerId, weekStart: range.start } },
       });

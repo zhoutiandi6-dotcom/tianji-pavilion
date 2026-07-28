@@ -129,12 +129,6 @@ export default function FazhiListPage() {
   }, []);
 
   useEffect(() => {
-    if (role === "DESIGN_MANAGER" && filters.scope === "design-assignment") {
-      router.replace("/dashboard/weekly-designer-plans?tab=unassigned");
-    }
-  }, [role, filters.scope, router]);
-
-  useEffect(() => {
     if (role === "DESIGN_MANAGER" || isAdmin) {
       userApi.findDesigners().then((res) => setDesigners(res.data.data || res.data || [])).catch(() => setDesigners([]));
     }
@@ -338,7 +332,7 @@ export default function FazhiListPage() {
       <div>
         <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
           <div><Title level={4} style={{ margin: 0 }}>待运营主管审批</Title><Text type="secondary">整单审批放行或退回补充；图片仅用于资料核查，不支持局部放行。</Text></div>
-          <Button onClick={() => router.push("/dashboard")}>返回驾驶舱</Button>
+          <Space><Button onClick={() => router.push("/dashboard/weekly-operations-approval-plans")}>安排计划周</Button><Button onClick={() => router.push("/dashboard")}>返回驾驶舱</Button></Space>
         </Row>
         <Card style={{ marginBottom: 16 }}>
           <Row gutter={[12, 12]}>
@@ -374,7 +368,7 @@ export default function FazhiListPage() {
   return (
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
-        <Title level={4} style={{ margin: 0 }}>法旨中心</Title>
+        <Title level={4} style={{ margin: 0 }}>{filters.scope === "design-assignment" ? "待分配" : filters.scope === "design-reviews" ? "待审核" : filters.scope === "design-tasks" ? "设计任务" : "法旨中心"}</Title>
         <Space wrap>
           {canExport && <Button icon={<DownloadOutlined />} onClick={exportCsv}>导出当前筛选</Button>}
           {canCreateTask && <Button type="primary" icon={<PlusOutlined />} onClick={() => router.push("/dashboard/fazhi/new")}>新建法旨</Button>}

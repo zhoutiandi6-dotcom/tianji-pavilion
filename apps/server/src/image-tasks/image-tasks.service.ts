@@ -284,14 +284,33 @@ export class ImageTasksService {
       }
       const data: any = {};
       if (dto.status === "IN_PROGRESS" && ["NOT_STARTED", "REVISION_REQUIRED"].includes(imageTask.status)) data.status = "IN_PROGRESS";
-      if (dto.status === "SUBMITTED_FOR_REVIEW" && ["IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
+      if (dto.status === "SUBMITTED_FOR_REVIEW" && ["NOT_STARTED", "IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
         data.status = "SUBMITTED_FOR_REVIEW";
         data.reviewStatus = "PENDING";
+        data.submittedAt = new Date();
+        data.submittedById = userId;
       }
       if (dto.designNote !== undefined) data.designNote = dto.designNote;
       if (dto.completedAttachmentUrl !== undefined) data.completedAttachmentUrl = dto.completedAttachmentUrl;
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid image task update");
-      const result = await this.prisma.imageTask.update({ where: { id }, data });
+      const result = await this.prisma.$transaction(async (tx: any) => {
+        const updated = await tx.imageTask.update({ where: { id }, data });
+        if (data.status === "IN_PROGRESS" || data.status === "SUBMITTED_FOR_REVIEW") {
+          await this.workflowEngine.recalcTaskStatusInTransaction(tx, imageTask.taskId);
+        }
+        if (data.status === "SUBMITTED_FOR_REVIEW") {
+          await tx.auditEvent.create({
+            data: {
+              resourceType: "image_task",
+              resourceId: id,
+              action: imageTask.status === "REVISION_REQUIRED" ? "design_review_resubmitted" : "design_review_submitted",
+              operatorId: userId,
+              metadata: JSON.stringify({ taskId: imageTask.taskId, previousStatus: imageTask.status, submittedAt: data.submittedAt.toISOString(), submittedById: userId }),
+            },
+          });
+        }
+        return updated;
+      });
       if (data.status === "IN_PROGRESS") {
         await this.eventBus.publish("image_task.started", new ImageTaskStarted(id, imageTask.taskId, userId));
       } else if (data.status === "SUBMITTED_FOR_REVIEW") {
@@ -300,7 +319,6 @@ export class ImageTasksService {
           new ImageTaskSubmittedForReview(id, imageTask.taskId, userId, imageTask.imageTitle || undefined),
         );
       }
-      if (data.status === "IN_PROGRESS" || data.status === "SUBMITTED_FOR_REVIEW") await this.workflowEngine.recalcTaskStatus(imageTask.taskId);
       await this.log.log({
         userId,
         action: "update_image_task",
@@ -375,6 +393,9 @@ export class ImageTasksService {
         if (data.status === "APPROVED" && approvedAt) {
           await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, id, userId, approvedAt);
         }
+        if (data.status === "APPROVED" || data.status === "REVISION_REQUIRED") {
+          await this.workflowEngine.recalcTaskStatusInTransaction(tx, imageTask.taskId);
+        }
         return updated;
       });
       if (dto.designerId && dto.designerId !== imageTask.designerId) {
@@ -401,7 +422,6 @@ export class ImageTasksService {
           targetId: id,
           content: data.status === "APPROVED" ? `Approve design review: ${imageTask.imageTitle || `#${imageTask.imageIndex}`}` : `Reject design review: ${imageTask.imageTitle || `#${imageTask.imageIndex}`}`,
         });
-        await this.workflowEngine.recalcTaskStatus(imageTask.taskId);
         const event = data.status === "APPROVED"
           ? new ImageTaskReviewApproved(id, imageTask.taskId, userId, imageTask.designerId, imageTask.imageTitle || undefined)
           : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined);

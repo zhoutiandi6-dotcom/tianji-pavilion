@@ -49,7 +49,13 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const method = String(response.config.method || "get").toLowerCase();
+    if (typeof window !== "undefined" && ["post", "put", "patch", "delete"].includes(method)) {
+      window.dispatchEvent(new Event("tianji:dashboard-refresh"));
+    }
+    return response;
+  },
   (error: AxiosError<ApiResponse>) => {
     const data = error.response?.data;
     const requestUrl = error.config?.url || "";
@@ -131,6 +137,7 @@ export const weeklyOperationsApprovalPlanApi = {
   getCandidates: (weekStart: string, search?: string) => api.get("/weekly-operations-approval-plans/candidates", { params: { weekStart, search } }),
   addDecrees: (data: { weekStart: string; decreeIds: number[] }) => api.post("/weekly-operations-approval-plans/items", data),
   removeItem: (itemId: number, reason: string) => api.post(`/weekly-operations-approval-plans/items/${itemId}/remove`, { reason }),
+  moveItem: (itemId: number, data: { weekStart: string; reason: string }) => api.post(`/weekly-operations-approval-plans/items/${itemId}/move`, data),
 };
 
 export const attachmentApi = {
@@ -154,6 +161,7 @@ export const attachmentApi = {
 
 export const dashboardApi = {
   getStats: () => api.get("/dashboard/overview"),
+  getRoleDashboard: (includeAnalytics = true) => api.get("/dashboard/role", { params: { analytics: includeAnalytics ? undefined : "false" } }),
 };
 
 export const logApi = {

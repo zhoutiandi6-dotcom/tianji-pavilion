@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -23,10 +23,11 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import api from "@/lib/api";
+import api, { dashboardApi } from "@/lib/api";
 import Loading from "@/components/Loading";
 import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
 import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
+import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 import { displayUserName } from "@/lib/display";
 
 const { Title, Text } = Typography;
@@ -100,23 +101,35 @@ export default function DashboardPage() {
   const [user, setUser] = useState<any>(null);
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    Promise.all([api.get("/auth/me"), api.get("/dashboard/overview")])
+  const loadDashboard = useCallback((includeAnalytics = true) => {
+    setLoading(true);
+    Promise.all([api.get("/auth/me"), dashboardApi.getRoleDashboard(includeAnalytics)])
       .then(([me, overview]) => {
         setUser(me.data.data || me.data);
-        setData(overview.data.data || overview.data);
+        const next = overview.data.data || overview.data;
+        setData((previous: any) => includeAnalytics ? next : {
+          ...next,
+          roleData: { ...(previous?.roleData || {}), ...(next.roleData || {}) },
+        });
       })
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    void loadDashboard(true);
+    return undefined;
+  }, [loadDashboard]);
+
+  useDashboardRefresh({ refreshCore: () => loadDashboard(false), refreshAnalytics: () => loadDashboard(true) });
+
   if (loading) return <Loading />;
 
   if (user?.role === "DESIGN_MANAGER") {
-    return <DesignManagerDashboard data={data} user={user} />;
+    return <DesignManagerDashboard data={data} user={user} roleData={data.roleData} />;
   }
 
   if (user?.role === "OPERATION_MANAGER") {
-    return <OperationManagerDashboard user={user} />;
+    return <OperationManagerDashboard user={user} roleData={data.roleData} />;
   }
 
   const cards = data.cards || [];

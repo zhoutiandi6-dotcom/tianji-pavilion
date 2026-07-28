@@ -69,6 +69,7 @@ model User {
   imageTasks          ImageTask[]      @relation("ImageTaskDesigner")
   imageTasksAssigned  ImageTask[]      @relation("ImageTaskAssignedBy")
   imageTasksApproved  ImageTask[]      @relation("ImageTaskApprovedBy")
+  imageTasksSubmitted ImageTask[]      @relation("ImageTaskSubmittedBy")
   approvalRecordsMade ApprovalRecord[]
   submissionsMade     TaskSubmissionRecord[] @relation("TaskSubmissionSubmitter")
   submissionsWithdrawn TaskSubmissionRecord[] @relation("TaskSubmissionWithdrawnBy")
@@ -258,6 +259,8 @@ model ImageTask {
   assignedById           Int?
   approvedAt             DateTime?
   approvedById           Int?
+  submittedAt            DateTime?
+  submittedById          Int?
   status                 String    @default("WAITING_OPS_APPROVAL")
   sortOrder              Int       @default(0)
   remark                 String?
@@ -274,6 +277,7 @@ model ImageTask {
   designer    User?        @relation("ImageTaskDesigner", fields: [designerId], references: [id])
   assignedBy  User?        @relation("ImageTaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   approvedBy  User?        @relation("ImageTaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  submittedBy User?        @relation("ImageTaskSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
   attachments Attachment[]
   weeklyPlanItems WeeklyPlanItem[]
 
@@ -283,6 +287,8 @@ model ImageTask {
   @@index([assignedById])
   @@index([approvedAt])
   @@index([approvedById])
+  @@index([submittedAt])
+  @@index([submittedById])
   @@index([status])
   @@index([createdAt])
   @@map("image_tasks")

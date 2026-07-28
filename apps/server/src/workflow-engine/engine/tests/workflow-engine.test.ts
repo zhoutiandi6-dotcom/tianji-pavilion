@@ -207,6 +207,15 @@ describe("WorkflowEngine", () => {
   });
 
   describe("submission validation", () => {
+    it("reports a missing compatible product from the persisted approval field", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, compatibleProduct: "" });
+
+      await expect(engine.submit(1, 1, "OPERATION")).rejects.toMatchObject({
+        response: expect.objectContaining({ message: expect.arrayContaining(["法旨缺少适配产品"]) }),
+      });
+      expect(prisma.taskSubmissionRecord.create).not.toHaveBeenCalled();
+    });
+
     it("returns specific missing field messages before creating a submission record", async () => {
       prisma.task.findUnique.mockResolvedValue({
         ...mockTask,
@@ -257,6 +266,18 @@ describe("WorkflowEngine", () => {
       ]);
       await engine.recalcTaskStatus(1);
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.completed", expect.any(Object));
+    });
+
+    it("updates the parent workflow to DESIGN_REVIEW in the same transaction as a designer submission", async () => {
+      const tx = {
+        imageTask: { findMany: jest.fn().mockResolvedValue([{ status: "SUBMITTED_FOR_REVIEW" }]) },
+        task: { findUnique: jest.fn().mockResolvedValue({ workflowStatus: "DESIGN_ASSIGNED" }), update: jest.fn().mockResolvedValue({}) },
+      };
+
+      const status = await engine.recalcTaskStatusInTransaction(tx, 1);
+
+      expect(status).toBe("DESIGN_REVIEW");
+      expect(tx.task.update).toHaveBeenCalledWith({ where: { id: 1 }, data: { workflowStatus: "DESIGN_REVIEW" } });
     });
   });
 });

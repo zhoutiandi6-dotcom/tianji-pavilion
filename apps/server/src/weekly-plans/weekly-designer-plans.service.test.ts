@@ -31,7 +31,7 @@ describe("WeeklyDesignerPlansService", () => {
 
   beforeEach(() => {
     prisma = {
-      weeklyPlan: { findUnique: jest.fn() },
+      weeklyPlan: { findUnique: jest.fn(), upsert: jest.fn().mockImplementation(({ create }: any) => ({ id: 1, ...create })) },
       weeklyPlanItem: { findMany: jest.fn() },
       weeklyDesignerPlan: {
         findMany: jest.fn(),

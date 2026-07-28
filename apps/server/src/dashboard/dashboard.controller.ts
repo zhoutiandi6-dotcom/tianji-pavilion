@@ -1,4 +1,4 @@
-import { Controller, Get, Request, UseGuards } from "@nestjs/common";
+import { Controller, Get, Query, Request, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { PrismaService } from "../common/prisma.service";
 import {
@@ -8,6 +8,7 @@ import {
   TaskVisibilityService,
 } from "../common/task-visibility.service";
 import { WeeklyDesignerPlansService } from "../weekly-plans/weekly-designer-plans.service";
+import { DashboardRoleService } from "./dashboard-role.service";
 
 const RECENT_ACTION_LABELS: Record<string, string> = {
   create_task: "创建法旨",
@@ -58,7 +59,19 @@ export class DashboardController {
     private prisma: PrismaService,
     private visibility: TaskVisibilityService,
     private weeklyDesignerPlans: WeeklyDesignerPlansService,
+    private dashboardRole: DashboardRoleService,
   ) {}
+
+  @Get("role")
+  async getRoleDashboard(@Request() req: any, @Query("analytics") analytics?: string) {
+    const userId = Number(req.user.sub);
+    const role = String(req.user.role || "");
+    const [overview, roleData] = await Promise.all([
+      this.getOverview(req),
+      this.dashboardRole.get(role, userId, analytics !== "false"),
+    ]);
+    return { ...overview, roleData };
+  }
 
   @Get("overview")
   async getOverview(@Request() req: any) {

@@ -11,6 +11,10 @@ class AddOperationsApprovalPlanDecreesDto {
 class RemoveOperationsApprovalPlanItemDto {
   @IsString() @IsNotEmpty() @MaxLength(300) reason!: string;
 }
+class MoveOperationsApprovalPlanItemDto {
+  @IsDateString() weekStart!: string;
+  @IsString() @IsNotEmpty() @MaxLength(300) reason!: string;
+}
 
 @UseGuards(AuthGuard("jwt"))
 @Controller("weekly-operations-approval-plans")
@@ -31,4 +35,7 @@ export class WeeklyOperationsApprovalPlansController {
 
   @Post("items/:itemId/remove")
   removeItem(@Param("itemId") itemId: string, @Body() dto: RemoveOperationsApprovalPlanItemDto, @Request() req: any) { return this.service.removeDecreeItem(Number(itemId), dto.reason, req.user.sub, req.user.role); }
+
+  @Post("items/:itemId/move")
+  moveItem(@Param("itemId") itemId: string, @Body() dto: MoveOperationsApprovalPlanItemDto, @Request() req: any) { return this.service.moveDecreeItem(Number(itemId), dto.weekStart, dto.reason, req.user.sub, req.user.role); }
 }

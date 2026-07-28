@@ -149,7 +149,7 @@ export default function FazhiDetailPage() {
       setMainDraft({
         storeId: data.storeId,
         productCode: data.productCode || "",
-        productName: data.productName || "",
+        compatibleProduct: data.compatibleProduct || data.productName || "",
         requesterName: displayRequester(data, ""),
         priority: data.priority || "NORMAL",
         imageCount: data.imageCount || data.imageTasks?.length || 1,
@@ -189,7 +189,7 @@ export default function FazhiDetailPage() {
   const mainDraftChanged = !!task && (
     (mainDraft.storeId ?? null) !== (task.storeId ?? null) ||
     (mainDraft.productCode || "") !== (task.productCode || "") ||
-    (mainDraft.productName || "") !== (task.productName || "") ||
+    (mainDraft.compatibleProduct || "") !== (task.compatibleProduct || task.productName || "") ||
     (mainDraft.requesterName || "") !== displayRequester(task, "") ||
     (mainDraft.priority || "NORMAL") !== (task.priority || "NORMAL") ||
     Number(mainDraft.imageCount || 1) !== Number(task.imageCount || task.imageTasks?.length || 1) ||
@@ -485,12 +485,12 @@ export default function FazhiDetailPage() {
     }
   };
 
-  const saveMainTask = async () => {
+  const saveMainTask = async (showToast = true, reload = true) => {
     try {
       await taskApi.update(id, {
         storeId: mainDraft.storeId || null,
         productCode: mainDraft.productCode || "",
-        productName: mainDraft.productName || "",
+        compatibleProduct: mainDraft.compatibleProduct || "",
         requesterName: displayName(mainDraft.requesterName, displayRequester(task)),
         priority: mainDraft.priority || "NORMAL",
         urgent: (mainDraft.priority || "NORMAL") === "URGENT",
@@ -499,11 +499,13 @@ export default function FazhiDetailPage() {
         requirementTypeId: mainDraft.requirementTypeId || null,
         materialLinks,
       });
-      message.success("主单信息已保存");
-      loadTask();
+      if (showToast) message.success("主单信息已保存");
+      if (reload) await loadTask();
+      return true;
     } catch (err) {
       console.error("[fazhi-detail] save main task failed", err);
       message.error(getErrorMessage(err, "保存主单信息失败，请稍后重试"));
+      return false;
     }
   };
 
@@ -542,6 +544,9 @@ export default function FazhiDetailPage() {
 
   const submitApproval = async () => {
     try {
+      // Submission validates persisted data, so save the editable main form first.
+      const saved = await saveMainTask(false, false);
+      if (!saved) return;
       await taskApi.submit(id);
       message.success("已提交运营主管审批");
       loadTask();
@@ -774,7 +779,7 @@ export default function FazhiDetailPage() {
         title={task.serialNumber}
         extra={(
           <Space wrap>
-            {canEditDraft && <Button icon={<SaveOutlined />} onClick={saveMainTask}>保存主单信息</Button>}
+            {canEditDraft && <Button icon={<SaveOutlined />} onClick={() => saveMainTask()}>保存主单信息</Button>}
             {canSubmitOps && <Button type="primary" icon={<SendOutlined />} onClick={submitApproval}>提交运营主管审批</Button>}
             {canWithdraw && <Button icon={<RollbackOutlined />} onClick={withdrawApproval}>撤回修改</Button>}
             {canOpsApprove && <Button type="primary" icon={<CheckOutlined />} onClick={approveTask}>审批通过</Button>}
@@ -805,7 +810,7 @@ export default function FazhiDetailPage() {
             {canEditDraft ? <Input value={mainDraft.productCode || ""} onChange={(event) => updateMainDraft({ productCode: event.target.value })} /> : (task.productCode || "-")}
           </Descriptions.Item>
           <Descriptions.Item label="兼容产品">
-            {canEditDraft ? <Input value={mainDraft.productName || ""} onChange={(event) => updateMainDraft({ productName: event.target.value })} /> : (task.productName || task.compatibleProduct || "-")}
+            {canEditDraft ? <Input value={mainDraft.compatibleProduct || ""} onChange={(event) => updateMainDraft({ compatibleProduct: event.target.value })} /> : (task.compatibleProduct || task.productName || "-")}
           </Descriptions.Item>
           <Descriptions.Item label="需求人">
             {canEditDraft ? <Input value={mainDraft.requesterName || ""} onChange={(event) => updateMainDraft({ requesterName: event.target.value })} /> : displayRequester(task)}

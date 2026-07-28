@@ -1,8 +1,9 @@
 ﻿'use client';
 
 import type React from "react";
+import { Suspense } from "react";
 import { useState, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Layout, Menu, Button, Dropdown, Typography, Badge, Space } from "antd";
 import {
   HomeOutlined, FileTextOutlined, ShopOutlined, TagsOutlined,
@@ -52,6 +53,7 @@ const getMenuItems = (role: string) => {
     return [
       ...common,
       fazhiCenter,
+      { key: "/dashboard/fazhi?scope=design-assignment", icon: <FileTextOutlined />, label: "待分配" },
       { key: "/dashboard/fazhi?scope=design-reviews", icon: <FileTextOutlined />, label: "待审核" },
       { key: "/dashboard/fazhi?scope=design-tasks", icon: <FileTextOutlined />, label: "设计任务" },
       { key: "/dashboard/weekly-designer-plans", icon: <FileTextOutlined />, label: "本周计划" },
@@ -84,9 +86,10 @@ const getMenuItems = (role: string) => {
   return common;
 };
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [collapsed, setCollapsed] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -126,7 +129,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (loading) return <Loading />;
 
-  const selectedKey = "/" + pathname.split("/").slice(1, 3).join("/");
+  const scope = searchParams.get("scope");
+  const selectedKey = pathname === "/dashboard/fazhi" && scope
+    ? `/dashboard/fazhi?scope=${scope}`
+    : "/" + pathname.split("/").slice(1, 3).join("/");
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -189,6 +195,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </Layout>
     </Layout>
   );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<Loading />}>{<DashboardLayoutContent>{children}</DashboardLayoutContent>}</Suspense>;
 }
 
 

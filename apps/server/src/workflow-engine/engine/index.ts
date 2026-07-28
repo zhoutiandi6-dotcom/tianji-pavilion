@@ -382,6 +382,19 @@ export class WorkflowEngine {
     return computedStatus;
   }
 
+  async recalcTaskStatusInTransaction(tx: any, taskId: number): Promise<string> {
+    const [imageTasks, task] = await Promise.all([
+      tx.imageTask.findMany({ where: { taskId, deletedAt: null }, select: { status: true } }),
+      tx.task.findUnique({ where: { id: taskId }, select: { workflowStatus: true } }),
+    ]);
+    if (!task) throw new NotFoundException("Task not found");
+    const computedStatus = StateMachine.calcTaskWorkflowStatus(imageTasks.map((item: any) => item.status));
+    if ([TASK_WORKFLOW_STATUS.OPS_APPROVED, TASK_WORKFLOW_STATUS.DESIGN_ASSIGNED, TASK_WORKFLOW_STATUS.IN_DESIGN, TASK_WORKFLOW_STATUS.DESIGN_REVIEW, TASK_WORKFLOW_STATUS.DESIGN_APPROVED].includes(task.workflowStatus as any) && task.workflowStatus !== computedStatus) {
+      await tx.task.update({ where: { id: taskId }, data: { workflowStatus: computedStatus } });
+    }
+    return computedStatus;
+  }
+
   private async recordLog(userId: number, action: string, targetType: string, targetId: number, content?: string) {
     return this.logService.log({ userId, action, targetType, targetId, content });
   }

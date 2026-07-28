@@ -37,7 +37,7 @@ describe("ImageTasksService stage A audit writes", () => {
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     log = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
-    workflowEngine = { recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED") };
+    workflowEngine = { recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED"), recalcTaskStatusInTransaction: jest.fn().mockResolvedValue("DESIGN_REVIEW") };
     weeklyPlans = {
       addAssignedTasksInTransaction: jest.fn().mockResolvedValue({ id: 1 }),
       completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "COMPLETED" }),
@@ -173,6 +173,33 @@ describe("ImageTasksService stage A audit writes", () => {
       }),
     });
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
+  });
+
+  it("submits a designer task atomically into pending design review with submission audit fields", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "IN_PROGRESS",
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
+
+    expect(prisma.imageTask.update).toHaveBeenCalledWith({ where: { id: 1 }, data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", reviewStatus: "PENDING", submittedAt: expect.any(Date), submittedById: 7 }) });
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
+    expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "design_review_submitted", operatorId: 7 }) }));
+  });
+
+  it("allows a returned task to resubmit without creating a second assignment", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "REVISION_REQUIRED",
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
+
+    expect(prisma.imageTask.update).toHaveBeenCalledWith({ where: { id: 1 }, data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", submittedById: 7 }) });
+    expect(weeklyPlans.addAssignedTasksInTransaction).not.toHaveBeenCalled();
   });
 
   it("rolls back the staged assignment when its audit event fails", async () => {

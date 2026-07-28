@@ -35,6 +35,7 @@ export class TasksService {
         { serialNumber: { contains: q } },
         { productCode: { contains: q } },
         { productName: { contains: q } },
+        { compatibleProduct: { contains: q } },
         { requesterName: { contains: q } },
         { store: { name: { contains: q } } },
       ] });
@@ -333,7 +334,7 @@ export class TasksService {
           productName: dto.productName,
           storeId: dto.storeId,
           requirementTypeId: dto.requirementTypeId,
-          compatibleProduct: dto.compatibleProduct,
+          compatibleProduct: dto.compatibleProduct ?? dto.productName,
           requesterName: dto.requesterName,
           operatorOwner: dto.operatorOwner,
           submittedAt: dto.submittedAt ? new Date(dto.submittedAt) : null,
@@ -385,6 +386,10 @@ export class TasksService {
     }
 
     const data: any = { ...dto };
+    // Keep legacy productName clients compatible with the canonical approval field.
+    if (dto.compatibleProduct === undefined && dto.productName !== undefined) {
+      data.compatibleProduct = dto.productName;
+    }
     delete data.urgent;
     if (dto.urgent !== undefined) data.priority = dto.urgent ? "URGENT" : "NORMAL";
     if (dto.deadline !== undefined) data.deadline = dto.deadline ? new Date(dto.deadline) : null;

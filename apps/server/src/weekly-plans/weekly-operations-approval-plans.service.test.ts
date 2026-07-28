@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { getShanghaiWeekRange } from "../common/shanghai-time";
 import { WeeklyOperationsApprovalPlansService } from "./weekly-operations-approval-plans.service";
 
@@ -12,7 +12,7 @@ describe("WeeklyOperationsApprovalPlansService", () => {
   beforeEach(() => {
     prisma = {
       weeklyOperationsApprovalPlan: { findUnique: jest.fn(), create: jest.fn().mockImplementation(({ data }: any) => ({ id: 41, ...data, createdAt: new Date(), updatedAt: new Date() })) },
-      weeklyOperationsApprovalPlanItem: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn(), count: jest.fn().mockResolvedValue(0), createMany: jest.fn().mockResolvedValue({ count: 2 }), create: jest.fn().mockResolvedValue({ id: 51 }), update: jest.fn().mockResolvedValue({ id: 51 }) },
+      weeklyOperationsApprovalPlanItem: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn(), count: jest.fn().mockResolvedValue(0), createMany: jest.fn().mockResolvedValue({ count: 2 }), create: jest.fn().mockResolvedValue({ id: 51 }), update: jest.fn().mockResolvedValue({ id: 51 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       task: { findMany: jest.fn().mockResolvedValue([]) },
       imageTask: { count: jest.fn().mockResolvedValue(6) },
       auditEvent: { create: jest.fn().mockResolvedValue({ id: 1 }) },
@@ -96,5 +96,28 @@ describe("WeeklyOperationsApprovalPlansService", () => {
   it("keeps historical weeks and non-manager roles read-only", async () => {
     await expect(service.addDecrees({ weekStart: "2020-01-06", decreeIds: [11] }, 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.getWeekOverview(7, "OPERATION")).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("moves a pending decree to the next week with an audit trail", async () => {
+    const sourceRange = getShanghaiWeekRange();
+    const source = { id: 51, decreeId: 11, planId: 41, removedAt: null, plan: { id: 41, managerId: 9, weekStart: sourceRange.start, weekEnd: sourceRange.end }, decree: { workflowStatus: "SUBMITTED", approvalRecords: [] } };
+    prisma.weeklyOperationsApprovalPlanItem.findUnique.mockResolvedValueOnce(source).mockResolvedValueOnce(null);
+    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue(null);
+    prisma.weeklyOperationsApprovalPlanItem.findFirst.mockResolvedValue(null);
+    prisma.weeklyOperationsApprovalPlanItem.count.mockResolvedValue(0);
+    prisma.imageTask.count.mockResolvedValue(3);
+
+    const result = await service.moveDecreeItem(51, nextWeekStart(), "延后至下周", 9, "OPERATION_MANAGER");
+
+    expect(result.toWeekStart).toEqual(getShanghaiWeekRange(new Date(sourceRange.start.getTime() + 7 * 86400000)).start);
+    expect(prisma.weeklyOperationsApprovalPlanItem.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 51, removedAt: null } }));
+    expect(prisma.weeklyOperationsApprovalPlanItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ decreeId: 11, plannedImageCountSnapshot: 3 }) });
+    expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "weekly_operations_approval_plan_item_moved" }) }));
+  });
+
+  it("does not move an already approved decree", async () => {
+    const range = getShanghaiWeekRange();
+    prisma.weeklyOperationsApprovalPlanItem.findUnique.mockResolvedValue({ id: 51, decreeId: 11, plan: { managerId: 9, weekStart: range.start, weekEnd: range.end }, decree: { workflowStatus: "OPS_APPROVED", approvalRecords: [{ id: 1 }] } });
+    await expect(service.moveDecreeItem(51, nextWeekStart(), "已放行后不可移动", 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(BadRequestException);
   });
 });

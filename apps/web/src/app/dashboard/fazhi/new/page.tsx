@@ -84,7 +84,7 @@ function NewFazhiPageContent() {
       const res = await taskApi.create({
         storeId: values.storeId,
         productCode: values.productCode,
-        productName: values.productName,
+        compatibleProduct: values.compatibleProduct,
         requesterName: displayName(values.requesterName, displayUserName(currentUser)),
         operatorOwner: displayUserName(currentUser),
         priority: values.urgent ? "URGENT" : "NORMAL",
@@ -146,7 +146,7 @@ function NewFazhiPageContent() {
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
-              <Form.Item name="productName" label="兼容产品">
+              <Form.Item name="compatibleProduct" label="兼容产品">
                 <Input placeholder="请输入兼容产品" />
               </Form.Item>
             </Col>
