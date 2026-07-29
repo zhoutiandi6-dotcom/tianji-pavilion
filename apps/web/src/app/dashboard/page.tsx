@@ -83,7 +83,9 @@ function statusUrl(status?: string) {
     : "/dashboard/fazhi?scope=processing";
 }
 
-function formatShanghaiTime(value: string) {
+function formatShanghaiTime(value?: string | null) {
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return '-';
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
@@ -91,7 +93,7 @@ function formatShanghaiTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export default function DashboardPage() {

@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
-import { getPreviousShanghaiWeekRange, getShanghaiDayRange, getShanghaiWeekRange } from "../common/shanghai-time";
+import { formatShanghaiDate, getPreviousShanghaiWeekRange, getShanghaiDayRange, getShanghaiWeekRange } from "../common/shanghai-time";
 import { TaskVisibilityService } from "../common/task-visibility.service";
 import { WeeklyDesignerPlansService } from "../weekly-plans/weekly-designer-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
@@ -25,6 +25,15 @@ export class DashboardRoleService {
   private weekLabel(range: { start: Date; end: Date }) {
     const format = (value: Date) => new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit" }).format(value);
     return `${format(range.start)}—${format(new Date(range.end.getTime() - 1))}`;
+  }
+
+  private serializeWeek(range: { start: Date; end: Date }) {
+    return {
+      weekStart: formatShanghaiDate(range.start),
+      displayWeekEnd: formatShanghaiDate(new Date(range.end.getTime() - DAY_MS)),
+      nextWeekStart: formatShanghaiDate(range.end),
+      label: this.weekLabel(range),
+    };
   }
 
   private dailyTrend(range: { start: Date; end: Date }, rows: { at: Date; count: number }[]) {
@@ -63,7 +72,7 @@ export class DashboardRoleService {
     ]);
     const rows = approvedRows.filter((row) => row.approvedAt).map((row) => ({ at: row.approvedAt!, count: 1 }));
     return {
-      source: "database", refreshedAt: new Date().toISOString(), week: { ...currentWeek, label: this.weekLabel(currentWeek) },
+      source: "database", refreshedAt: new Date().toISOString(), week: this.serializeWeek(currentWeek),
       metrics: { todayNewImageCount, weekNewImageCount },
       ...(includeAnalytics ? { trend: { days: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"], previous: this.dailyTrend(previousWeek, rows), current: this.dailyTrend(currentWeek, rows) } } : {}),
       weeklyPlan,
@@ -136,7 +145,7 @@ export class DashboardRoleService {
       return { id: task.id, serialNumber: task.serialNumber, requester: task.requesterName || task.creator?.displayName || task.creator?.username || "-", imageCount: task.imageTasks.length, status: task.workflowStatus, summary: rejected?.comment || (waitingHours >= 24 ? `等待 ${waitingHours} 小时` : "等待审批"), waitingHours };
     }).filter((row) => row.status === "OPS_REJECTED" || row.waitingHours >= 24).slice(0, 5);
     return {
-      source: "database", refreshedAt: new Date().toISOString(), week: { ...currentWeek, label: this.weekLabel(currentWeek) }, queue: { summary: queueSummary, items: queue.slice(0, 5) },
+      source: "database", refreshedAt: new Date().toISOString(), week: this.serializeWeek(currentWeek), queue: { summary: queueSummary, items: queue.slice(0, 5) },
       ...(includeAnalytics ? { trend: { days: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"], previous: this.dailyTrend(previousWeek, approved), current: this.dailyTrend(currentWeek, approved) }, quality: [...qualityByUser.values()], exceptions } : {}), weeklyPlan,
     };
   }

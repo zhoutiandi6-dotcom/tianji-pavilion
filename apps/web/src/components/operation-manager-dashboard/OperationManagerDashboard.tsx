@@ -6,6 +6,7 @@ import { Drawer, Progress, Tag } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import { DashboardTrendChart } from '@/components/dashboard-workbench/TrendChart';
 import styles from '@/components/design-manager-dashboard/design-manager-dashboard.module.css';
+import { formatShanghaiWeek } from '@/lib/shanghai-week';
 
 type OpsApprovalQueueItem = {
   id: number;
@@ -48,12 +49,16 @@ type OperationManagerDashboardProps = {
   roleData?: any;
 };
 
-const formatDateTime = (value?: string | null) => value
-  ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
-  : '-';
+const formatDateTime = (value?: string | null) => {
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date)
+    : '-';
+};
 
 const submissionLabel = (type: OpsApprovalQueueItem['submissionType']) => type === 'RESUBMIT' ? '退回后重提' : '首次提交';
 const rateFor = (firstPass: number, submitted: number) => submitted ? Math.round((firstPass / submitted) * 100) : 0;
+const formatWeek = (weekStart?: unknown) => formatShanghaiWeek(weekStart) || '周数据暂时无法加载';
 
 export default function OperationManagerDashboard({ user, roleData }: OperationManagerDashboardProps) {
   const router = useRouter();
@@ -72,7 +77,7 @@ export default function OperationManagerDashboard({ user, roleData }: OperationM
       <header className={styles.pageHeader}>
         <div>
           <h1>运营主管驾驶舱</h1>
-          <p>{roleData?.week?.label || '当前自然周'} · 当前角色：运营主管</p>
+          <p>{formatWeek(roleData?.week?.weekStart)} · 当前角色：运营主管</p>
         </div>
         <div className={styles.headerTools}>
           <span>{user.displayName || user.username || '运营主管'} · 数据库实时聚合</span>

@@ -30,6 +30,7 @@ describe("DashboardRoleService", () => {
 
     expect(result.source).toBe("database");
     expect(result.metrics).toEqual({ todayNewImageCount: 2, weekNewImageCount: 9 });
+    expect(result.week).toEqual(expect.objectContaining({ weekStart: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), displayWeekEnd: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), nextWeekStart: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) }));
     expect(prisma.imageTask.count).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: expect.objectContaining({ createdAt: expect.any(Object) }) }));
     expect(prisma.imageTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ approvedAt: expect.any(Object) }) }));
   });
@@ -47,6 +48,8 @@ describe("DashboardRoleService", () => {
     const result = await service.get("OPERATION_MANAGER", 3) as any;
 
     expect(result.queue.summary.pendingImageCount).toBe(3);
+    expect(result.week.weekStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(result.week.weekStart).not.toContain("T");
     expect(result.queue.summary.todayNewImageCount).toBe(3);
     expect(result.trend.current.reduce((sum: number, value: number) => sum + value, 0)).toBe(2);
     expect(result.quality[0]).toEqual(expect.objectContaining({ submitted: 2, pending: 2 }));

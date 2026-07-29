@@ -40,3 +40,18 @@ export function getPreviousShanghaiWeekRange(now = new Date()): TimeRange {
     end: current.start,
   };
 }
+
+export function formatShanghaiDate(value: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(value);
+}
+
+/** Parses the only public week identifier accepted by weekly-plan APIs. */
+export function getShanghaiWeekRangeForWeekStart(weekStart: string): TimeRange | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return null;
+  const [year, month, day] = weekStart.split("-").map(Number);
+  if (year === undefined || month === undefined || day === undefined) return null;
+  const anchor = new Date(Date.UTC(year, month - 1, day, 4));
+  if (!Number.isFinite(anchor.getTime()) || formatShanghaiDate(anchor) !== weekStart) return null;
+  const range = getShanghaiWeekRange(anchor);
+  return formatShanghaiDate(range.start) === weekStart ? range : null;
+}

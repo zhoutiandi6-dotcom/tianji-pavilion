@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button, Empty, Progress } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import { taskApi } from '@/lib/api';
+import { formatShanghaiWeek } from '@/lib/shanghai-week';
 import styles from './design-manager-dashboard.module.css';
 
 type DashboardProps = {
@@ -32,7 +33,8 @@ const cardValue = (cards: any[], imageStatus?: string) => {
 };
 
 const formatTime = (value?: string) => {
-  if (!value) return '-';
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return '-';
   return new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     month: '2-digit',
@@ -40,13 +42,12 @@ const formatTime = (value?: string) => {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-  }).format(new Date(value));
+  }).format(date);
 };
 
-const formatWeek = (start?: string, end?: string) => {
-  if (!start || !end) return '当前自然周 · 当前角色：设计主管';
-  const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit' });
-  return `${date.format(new Date(start))}—${date.format(new Date(new Date(end).getTime() - 1))} · 当前角色：设计主管`;
+const formatWeek = (weekStart?: string) => {
+  const range = formatShanghaiWeek(weekStart);
+  return range ? `${range} · 当前角色：设计主管` : '周数据暂时无法加载 · 当前角色：设计主管';
 };
 
 function TrendChart({ data }: { data?: { days?: string[]; previous?: number[]; current?: number[] } }) {
@@ -165,7 +166,7 @@ export default function DesignManagerDashboard({ data, user, roleData }: Dashboa
       <header className={styles.pageHeader}>
         <div>
           <h1>设计主管驾驶舱</h1>
-          <p>{formatWeek(roleData?.week?.start || plan?.weekStart, roleData?.week?.end || plan?.weekEnd)}</p>
+          <p>{formatWeek(roleData?.week?.weekStart || plan?.weekStart)}</p>
         </div>
         <div className={styles.headerTools}><span>{user?.displayName || user?.username || '设计主管'}</span><time>{today}</time></div>
       </header>
