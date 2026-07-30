@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { Card, Descriptions, Typography, Tag, Form, Input, Button, message, Spin } from "antd";
 import { useTheme } from "@/lib/context/theme";
-import api from "@/lib/api";
+import api, { API_BASE_URL } from "@/lib/api";
 import RoleGate from "@/components/RoleGate";
 import { displayUserName } from "@/lib/display";
 
@@ -90,7 +90,7 @@ function SettingsPageContent() {
 
       <Card title="环境配置">
         <Descriptions column={1} bordered size="small">
-          <Descriptions.Item label="后端地址">{process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"}</Descriptions.Item>
+          <Descriptions.Item label="后端地址">{API_BASE_URL}</Descriptions.Item>
           <Descriptions.Item label="认证方式">JWT + RBAC + Owner</Descriptions.Item>
           <Descriptions.Item label="数据库">SQLite</Descriptions.Item>
           <Descriptions.Item label="部署方式">Docker / 本地 Node.js</Descriptions.Item>

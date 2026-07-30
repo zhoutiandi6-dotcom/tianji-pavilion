@@ -31,6 +31,7 @@ import { AppModule } from "./app.module";
 import { UnifiedExceptionFilter } from "./common/unified-exception.filter";
 import { ResponseInterceptor } from "./common/response.interceptor";
 import { AppLogger } from "./common/logger.service";
+import { isAllowedLanDevOrigin } from "./common/lan-origin";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -52,7 +53,7 @@ async function bootstrap() {
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     });
   } else {
-    // Development: allow localhost + same-LAN 192.168.*.* frontend origins.
+    // Development/LAN trial: allow only local and RFC1918 IPv4 browser origins on the web port.
     const devOrigins: string[] = [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
@@ -64,10 +65,9 @@ async function bootstrap() {
       const extra = process.env.DEV_ALLOWED_ORIGINS.split(",").map((o: string) => o.trim());
       devOrigins.push(...extra);
     }
-    const isLanDevOrigin = (origin: string) => /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:3000$/.test(origin);
     app.enableCors({
       origin: (origin, callback) => {
-        if (!origin || devOrigins.includes(origin) || isLanDevOrigin(origin)) {
+        if (!origin || devOrigins.includes(origin) || isAllowedLanDevOrigin(origin)) {
           callback(null, true);
           return;
         }
