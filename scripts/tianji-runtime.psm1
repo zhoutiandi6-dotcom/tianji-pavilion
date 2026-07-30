@@ -7,6 +7,65 @@ $script:TianjiLogLimitBytes = 1024KB
 function Get-TianjiRuntimeDirectory { $script:TianjiRuntimeDirectory }
 function Get-TianjiStateFile { $script:TianjiStateFile }
 
+function Get-TianjiEnvValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+  $fromProcess = [Environment]::GetEnvironmentVariable($Name, "Process")
+  if ($fromProcess) { return $fromProcess.Trim() }
+  $envFile = Join-Path $Root "apps\\server\\.env"
+  if (-not (Test-Path -LiteralPath $envFile)) { return $null }
+  foreach ($line in Get-Content -LiteralPath $envFile) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
+    $separator = $trimmed.IndexOf("=")
+    if ($separator -lt 1) { continue }
+    if ($trimmed.Substring(0, $separator).Trim() -eq $Name) {
+      return $trimmed.Substring($separator + 1).Trim()
+    }
+  }
+  return $null
+}
+
+function Get-TianjiDataConfiguration {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $configuredRoot = Get-TianjiEnvValue -Root $Root -Name "TIANJI_DATA_ROOT"
+  if (-not $configuredRoot) {
+    throw "TIANJI_DATA_ROOT is required. Refusing to start Tianji with source-directory data. Run the explicit data migration first."
+  }
+  $dataRoot = [System.IO.Path]::GetFullPath($configuredRoot)
+  $databasePath = Join-Path $dataRoot "database\tianji.db"
+  $databaseUrl = "file:" + $databasePath.Replace("\", "/")
+  [pscustomobject]@{
+    DataRoot = $dataRoot
+    DatabasePath = $databasePath
+    DatabaseUrl = $databaseUrl
+    AttachmentsPath = Join-Path $dataRoot "uploads\attachments"
+    BackupRoot = Get-TianjiEnvValue -Root $Root -Name "TIANJI_BACKUP_ROOT"
+  }
+}
+
+function Test-TianjiBackupRoot {
+  param([Parameter(Mandatory = $true)]$DataConfiguration)
+  $backupRoot = $DataConfiguration.BackupRoot
+  if (-not $backupRoot) {
+    return [pscustomobject]@{ Available = $false; Writable = $false; Message = "TIANJI_BACKUP_ROOT is not configured." }
+  }
+  if (-not (Test-Path -LiteralPath $backupRoot -PathType Container)) {
+    return [pscustomobject]@{ Available = $false; Writable = $false; Message = "Backup root is unavailable in this PowerShell session: $backupRoot" }
+  }
+  $probe = Join-Path $backupRoot ".tianji-write-probe-$([Guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($probe, "probe")
+    Remove-Item -LiteralPath $probe -Force
+    return [pscustomobject]@{ Available = $true; Writable = $true; Message = "Backup root is available and writable: $backupRoot" }
+  } catch {
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ Available = $true; Writable = $false; Message = "Backup root is not writable in this PowerShell session: $backupRoot" }
+  }
+}
+
 function Initialize-TianjiRuntime {
   New-Item -ItemType Directory -Path $script:TianjiRuntimeDirectory -Force | Out-Null
 }
@@ -189,14 +248,21 @@ function Start-TianjiServiceProcess {
   $oldHost = $env:HOSTNAME
   $oldPort = $env:PORT
   $oldServerPort = $env:SERVER_PORT
+  $oldDataRoot = $env:TIANJI_DATA_ROOT
+  $oldDatabaseUrl = $env:DATABASE_URL
   try {
+    $dataConfig = Get-TianjiDataConfiguration -Root $Root
     $env:HOSTNAME = "0.0.0.0"
+    $env:TIANJI_DATA_ROOT = $dataConfig.DataRoot
+    $env:DATABASE_URL = $dataConfig.DatabaseUrl
     if ($Service -eq "frontend") { $env:PORT = "3000" } else { $env:SERVER_PORT = "3001" }
     $process = Start-Process -FilePath "node.exe" -WorkingDirectory $workingDirectory -WindowStyle Hidden -ArgumentList $arguments -RedirectStandardOutput $output -RedirectStandardError $error -PassThru
   } finally {
     $env:HOSTNAME = $oldHost
     $env:PORT = $oldPort
     $env:SERVER_PORT = $oldServerPort
+    $env:TIANJI_DATA_ROOT = $oldDataRoot
+    $env:DATABASE_URL = $oldDatabaseUrl
   }
   Start-Sleep -Milliseconds 250
   $snapshot = Get-TianjiProcessSnapshot -Pid $process.Id

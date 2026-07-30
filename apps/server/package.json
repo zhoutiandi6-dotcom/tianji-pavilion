@@ -16,6 +16,7 @@
     "audit:stage-a": "ts-node scripts/analyze-stage-a-backfill.ts",
     "audit:stage-b": "ts-node scripts/analyze-stage-b-initialization.ts",
     "cleanup:test-decrees": "ts-node scripts/cleanup-test-decrees.ts",
+    "data:migrate-root": "ts-node scripts/migrate-data-root.ts",
     "prisma:studio": "prisma studio",
     "test": "jest",
     "test:watch": "jest --watch",

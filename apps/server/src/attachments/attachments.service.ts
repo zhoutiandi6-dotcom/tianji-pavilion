@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { mkdir, writeFile } from "fs/promises";
 import { existsSync } from "fs";
-import { extname, join, resolve } from "path";
+import { extname, join } from "path";
 import { PrismaService } from "../common/prisma.service";
 import { OperationLogService } from "../operation-log/operation-log.service";
+import { getTianjiDataPaths, resolveAttachmentStoragePath, toAttachmentStoragePath } from "../common/tianji-data-paths";
 
 const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
 const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
@@ -13,7 +14,8 @@ const IMAGE_CATEGORIES = ["IMAGE_ORIGINAL", "IMAGE_REFERENCE", "IMAGE_COMPLETED"
 
 @Injectable()
 export class AttachmentsService {
-  private readonly uploadRoot = resolve(process.cwd(), "uploads", "attachments");
+  private readonly dataPaths = getTianjiDataPaths();
+  private readonly uploadRoot = this.dataPaths.attachmentsRoot;
 
   constructor(private prisma: PrismaService, private log: OperationLogService) {}
 
@@ -106,8 +108,13 @@ export class AttachmentsService {
     });
     if (!attachment || attachment.deletedAt) throw new NotFoundException("Attachment not found");
     if (!this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to download attachment");
-    const filePath = resolve(attachment.storagePath);
-    if (!filePath.startsWith(this.uploadRoot) || !existsSync(filePath)) throw new NotFoundException("File not found");
+    let filePath: string;
+    try {
+      filePath = resolveAttachmentStoragePath(attachment.storagePath, this.dataPaths);
+    } catch {
+      throw new NotFoundException("Attachment storage path is invalid");
+    }
+    if (!existsSync(filePath)) throw new NotFoundException("File not found");
     return { attachment, filePath };
   }
 
@@ -174,9 +181,8 @@ export class AttachmentsService {
     await mkdir(this.uploadRoot, { recursive: true });
     const extension = extname(file.originalname || "").toLowerCase();
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`;
-    const storagePath = join(this.uploadRoot, fileName);
-    await writeFile(storagePath, file.buffer);
-    return { fileName, extension, storagePath };
+    await writeFile(join(this.uploadRoot, fileName), file.buffer);
+    return { fileName, extension, storagePath: toAttachmentStoragePath(fileName) };
   }
 
   private async writeUploadLog(category: string, attachmentId: number, fileName: string, userId: number, req?: any) {

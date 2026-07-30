@@ -87,6 +87,16 @@ try {
   if (-not (Test-Path (Join-Path $root "node_modules"))) {
     throw "Project dependencies are missing. Run npm install in the project directory first."
   }
+  $dataConfig = Get-TianjiDataConfiguration -Root $root
+  Write-Host "Tianji data root: $($dataConfig.DataRoot)"
+  Write-Host "Tianji database: $($dataConfig.DatabasePath)"
+  Write-Host "Tianji uploads: $($dataConfig.AttachmentsPath)"
+  $backupRootStatus = Test-TianjiBackupRoot -DataConfiguration $dataConfig
+  if ($backupRootStatus.Writable) {
+    Write-Host $backupRootStatus.Message -ForegroundColor Green
+  } else {
+    Write-Host "Warning: $($backupRootStatus.Message) Local Tianji services will continue without Z-drive backup sync." -ForegroundColor Yellow
+  }
   $network = Select-TianjiLanAddress
   if ($network.Candidates.Count -gt 1) {
     Write-Host "LAN candidates:" -ForegroundColor Yellow

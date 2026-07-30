@@ -32,8 +32,13 @@ import { UnifiedExceptionFilter } from "./common/unified-exception.filter";
 import { ResponseInterceptor } from "./common/response.interceptor";
 import { AppLogger } from "./common/logger.service";
 import { isAllowedLanDevOrigin } from "./common/lan-origin";
+import { assertTianjiDataEnvironment } from "./common/tianji-data-paths";
 
 async function bootstrap() {
+  const dataPaths = assertTianjiDataEnvironment();
+  console.log(`Tianji data root: ${dataPaths.dataRoot}`);
+  console.log(`Tianji database: ${dataPaths.databasePath}`);
+  console.log(`Tianji uploads: ${dataPaths.attachmentsRoot}`);
   const app = await NestFactory.create(AppModule, {
     logger: new AppLogger(),
   });
