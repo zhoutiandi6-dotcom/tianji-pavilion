@@ -36,6 +36,9 @@ if (-not (Enter-TianjiMutex -Mutex $mutex)) { throw "Another Tianji restore oper
 try {
   $dataConfig = Get-TianjiDataConfiguration -Root $root
   $sourceBatch = (Resolve-Path -LiteralPath $BackupBatchPath).Path
+  if ($sourceBatch.EndsWith(".tmp") -or (Test-Path -LiteralPath (Join-Path $sourceBatch "failure.json"))) {
+    throw "Refusing to restore from an incomplete or failed Tianji backup batch: $sourceBatch"
+  }
   if (-not (Test-Path -LiteralPath (Join-Path $sourceBatch "manifest.json"))) { throw "Backup batch manifest was not found: $sourceBatch" }
   $stage = Copy-BackupBatchToRestoreStage -SourcePath $sourceBatch -DataConfig $dataConfig
   $manifest = Get-Content -LiteralPath (Join-Path $stage "manifest.json") -Raw | ConvertFrom-Json

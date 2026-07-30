@@ -4,7 +4,7 @@ Tianji runs only from `TIANJI_DATA_ROOT`. Z drive stores verified backup batches
 
 ## Batch layout
 
-`D:\TianjiData\backups\batches\<yyyyMMdd-HHmmss>` contains:
+`D:\TianjiData\backups\batches\<yyyyMMdd-HHmmss-fff>` contains:
 
 - `database\tianji.db`
 - `uploads\attachments\`
@@ -12,6 +12,8 @@ Tianji runs only from `TIANJI_DATA_ROOT`. Z drive stores verified backup batches
 - `manifest.json`, `manifest.sha256`, and `verification.json`
 
 The manifest records database and attachment hashes, table counts, file counts, sizes, application commit, and cloud-sync state. It contains no credentials, tokens, cookies, or business file contents.
+
+Each batch is assembled in a unique `.tmp` directory. The generator copies data, writes and confirms `manifest.json`, writes and confirms `manifest.sha256`, performs final verification, and only then atomically publishes the completed directory. Failed `.tmp` directories retain a `failure.json`; they are excluded from rotation, sync, and restore selection.
 
 ## Commands
 

@@ -80,6 +80,24 @@ async function writeJson(path: string, data: unknown) {
   await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+async function writeManifestChecksum(batchPath: string) {
+  const manifestPath = join(batchPath, "manifest.json");
+  const checksum = await sha256(manifestPath);
+  const checksumPath = join(batchPath, "manifest.sha256");
+  await writeFile(checksumPath, `${checksum}  manifest.json\n`, "utf8");
+  const writtenChecksum = (await readFile(checksumPath, "utf8")).trim().split(/\s+/)[0];
+  if (writtenChecksum !== checksum) throw new Error("Backup manifest SHA-256 write verification failed.");
+}
+
+async function markFailedBatch(temporaryPath: string, phase: string, error: unknown) {
+  await writeJson(join(temporaryPath, "failure.json"), {
+    status: "FAILED",
+    failedAt: new Date().toISOString(),
+    phase,
+    error: error instanceof Error ? error.message : String(error),
+  }).catch(() => undefined);
+}
+
 async function verifyBatch(batchPath: string) {
   const manifestPath = join(batchPath, "manifest.json");
   const manifestHashPath = join(batchPath, "manifest.sha256");
@@ -126,46 +144,68 @@ async function createBatch() {
   const temporaryPath = `${finalPath}.tmp`;
   if (await stat(finalPath).then(() => true).catch(() => false) || await stat(temporaryPath).then(() => true).catch(() => false)) throw new Error(`Backup batch already exists: ${batchId}`);
 
-  const sourceDatabaseInfo = verifyDatabase(sourceDatabase);
-  if (!sourceDatabaseInfo.quickCheck.every((value) => value === "ok") || sourceDatabaseInfo.foreignKeyCheckCount !== 0) throw new Error("Source database validation failed.");
-  assertRelativeAttachmentPaths(sourceDatabaseInfo.attachmentPaths);
-  await mkdir(join(temporaryPath, "database"), { recursive: true });
-  await mkdir(join(temporaryPath, "uploads"), { recursive: true });
-  await mkdir(join(temporaryPath, "quarantine"), { recursive: true });
+  let phase = "validate-source";
+  let temporaryDirectoryCreated = false;
+  try {
+    const sourceDatabaseInfo = verifyDatabase(sourceDatabase);
+    if (!sourceDatabaseInfo.quickCheck.every((value) => value === "ok") || sourceDatabaseInfo.foreignKeyCheckCount !== 0) throw new Error("Source database validation failed.");
+    assertRelativeAttachmentPaths(sourceDatabaseInfo.attachmentPaths);
+    phase = "create-temporary-directory";
+    await mkdir(batchesRoot, { recursive: true });
+    await mkdir(temporaryPath);
+    temporaryDirectoryCreated = true;
+    await mkdir(join(temporaryPath, "database"), { recursive: true });
+    await mkdir(join(temporaryPath, "uploads"), { recursive: true });
+    await mkdir(join(temporaryPath, "quarantine"), { recursive: true });
 
-  const source = new sqlite.DatabaseSync(sourceDatabase, { readOnly: true });
-  try { await sqlite.backup(source, join(temporaryPath, "database", "tianji.db")); } finally { source.close(); }
-  await cp(sourceAttachments, join(temporaryPath, "uploads", "attachments"), { recursive: true, force: false, errorOnExist: true });
-  // Quarantine is archived separately and is never restored into active uploads by default.
-  if (await stat(sourceQuarantine).then(() => true).catch(() => false)) await cp(sourceQuarantine, join(temporaryPath, "quarantine", "orphan-attachments"), { recursive: true, force: false, errorOnExist: true });
+    phase = "copy-database";
+    const source = new sqlite.DatabaseSync(sourceDatabase, { readOnly: true });
+    try { await sqlite.backup(source, join(temporaryPath, "database", "tianji.db")); } finally { source.close(); }
+    phase = "copy-uploads";
+    await cp(sourceAttachments, join(temporaryPath, "uploads", "attachments"), { recursive: true, force: false, errorOnExist: true });
+    phase = "copy-quarantine";
+    // Quarantine is archived separately and is never restored into active uploads by default.
+    if (await stat(sourceQuarantine).then(() => true).catch(() => false)) await cp(sourceQuarantine, join(temporaryPath, "quarantine", "orphan-attachments"), { recursive: true, force: false, errorOnExist: true });
 
-  const databasePath = join(temporaryPath, "database", "tianji.db");
-  const uploads = await inventory(join(temporaryPath, "uploads", "attachments"));
-  const quarantine = await inventory(join(temporaryPath, "quarantine", "orphan-attachments"));
-  const manifest: any = {
-    manifestVersion,
-    batchId,
-    createdAt: new Date().toISOString(),
-    gitCommit,
-    dataRoot: process.env.TIANJI_DATA_ROOT ?? null,
-    database: { relativePath: "database/tianji.db", size: (await stat(databasePath)).size, sha256: await sha256(databasePath) },
-    coreTableCounts: sourceDatabaseInfo.coreTableCounts,
-    attachmentRecordCount: sourceDatabaseInfo.attachmentRecordCount,
-    activeAttachmentRecordCount: sourceDatabaseInfo.attachmentPaths.length,
-    uploads,
-    quarantine,
-    toolVersion: "tianji-backup-batch/1",
-    automatic: process.env.TIANJI_BACKUP_AUTOMATIC === "true",
-    verification: { status: "pending" },
-    cloudSync: { status: "not-synced" },
-  };
-  await writeJson(join(temporaryPath, "manifest.json"), manifest);
-  const verification = await verifyBatch(temporaryPath);
-  manifest.verification = { status: "ok", verifiedAt: verification.verifiedAt };
-  await writeJson(join(temporaryPath, "manifest.json"), manifest);
-  await writeFile(join(temporaryPath, "manifest.sha256"), `${await sha256(join(temporaryPath, "manifest.json"))}  manifest.json\n`, "utf8");
-  await rename(temporaryPath, finalPath);
-  console.log(JSON.stringify({ status: "ok", batchPath: finalPath, batchId, verification }, null, 2));
+    phase = "write-manifest";
+    const databasePath = join(temporaryPath, "database", "tianji.db");
+    const uploads = await inventory(join(temporaryPath, "uploads", "attachments"));
+    const quarantine = await inventory(join(temporaryPath, "quarantine", "orphan-attachments"));
+    const manifest: any = {
+      manifestVersion,
+      batchId,
+      createdAt: new Date().toISOString(),
+      gitCommit,
+      dataRoot: process.env.TIANJI_DATA_ROOT ?? null,
+      database: { relativePath: "database/tianji.db", size: (await stat(databasePath)).size, sha256: await sha256(databasePath) },
+      coreTableCounts: sourceDatabaseInfo.coreTableCounts,
+      attachmentRecordCount: sourceDatabaseInfo.attachmentRecordCount,
+      activeAttachmentRecordCount: sourceDatabaseInfo.attachmentPaths.length,
+      uploads,
+      quarantine,
+      toolVersion: "tianji-backup-batch/1",
+      automatic: process.env.TIANJI_BACKUP_AUTOMATIC === "true",
+      verification: { status: "pending" },
+      cloudSync: { status: "not-synced" },
+    };
+    await writeJson(join(temporaryPath, "manifest.json"), manifest);
+    phase = "write-manifest-checksum";
+    await writeManifestChecksum(temporaryPath);
+    phase = "verify-batch";
+    const verification = await verifyBatch(temporaryPath);
+    manifest.verification = { status: "ok", verifiedAt: verification.verifiedAt };
+    await writeJson(join(temporaryPath, "manifest.json"), manifest);
+    phase = "write-final-manifest-checksum";
+    await writeManifestChecksum(temporaryPath);
+    phase = "final-verify-batch";
+    const finalVerification = await verifyBatch(temporaryPath);
+    phase = "publish-batch";
+    await rename(temporaryPath, finalPath);
+    console.log(JSON.stringify({ status: "ok", batchPath: finalPath, batchId, verification: finalVerification }, null, 2));
+  } catch (error) {
+    if (temporaryDirectoryCreated) await markFailedBatch(temporaryPath, phase, error);
+    throw error;
+  }
 }
 
 async function commandVerify() {

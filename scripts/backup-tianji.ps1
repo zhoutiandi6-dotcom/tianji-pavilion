@@ -103,7 +103,7 @@ try {
     if (Test-TianjiServicesHealthy) { throw "Tianji services are still healthy after stop. Refusing to copy an active SQLite database." }
   }
 
-  $batchId = Get-Date -Format "yyyyMMdd-HHmmss"
+  $batchId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
   $batchesRoot = Join-Path $dataConfig.BackupsPath "batches"
   New-Item -ItemType Directory -Path $batchesRoot -Force | Out-Null
   $gitCommit = (& git -C $root rev-parse HEAD).Trim()
@@ -118,11 +118,6 @@ try {
     TIANJI_BACKUP_AUTOMATIC = if ($Automatic) { "true" } else { "false" }
   }
   $batchPath = Join-Path $batchesRoot $batchId
-  $manifestPath = Join-Path $batchPath "manifest.json"
-  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-  $manifest | Add-Member -NotePropertyName automatic -NotePropertyValue ([bool]$Automatic) -Force
-  $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding utf8
-  (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant() + "  manifest.json" | Set-Content -LiteralPath (Join-Path $batchPath "manifest.sha256") -Encoding utf8
   Invoke-LocalBatchRotation -DataConfig $dataConfig
   Write-BackupLog -Message "action=created batch=$batchId automatic=$Automatic" -DataConfig $dataConfig
   Write-Host "Verified Tianji backup batch: $batchPath" -ForegroundColor Green

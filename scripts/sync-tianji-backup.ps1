@@ -51,6 +51,9 @@ if (-not (Enter-TianjiMutex -Mutex $mutex)) { throw "Another Tianji backup sync 
 try {
   $dataConfig = Get-TianjiDataConfiguration -Root $root
   $batchPath = (Resolve-Path -LiteralPath $BackupBatchPath).Path
+  if ($batchPath.EndsWith(".tmp") -or (Test-Path -LiteralPath (Join-Path $batchPath "failure.json"))) {
+    throw "Refusing to sync an incomplete or failed Tianji backup batch: $batchPath"
+  }
   $manifestPath = Join-Path $batchPath "manifest.json"
   if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Backup batch manifest was not found: $batchPath" }
   Invoke-BackupBatchVerify -BatchPath $batchPath
@@ -73,7 +76,16 @@ try {
   $cloudBatchesRoot = Join-Path $dataConfig.BackupRoot "batches"
   $destination = Join-Path $cloudBatchesRoot $batchId
   $temporaryDestination = "$destination.tmp"
-  if (Test-Path -LiteralPath $destination) { throw "Cloud backup batch already exists: $destination" }
+  if (Test-Path -LiteralPath $destination) {
+    Invoke-BackupBatchVerify -BatchPath $destination | Out-Null
+    $localManifestHash = (Get-FileHash -LiteralPath (Join-Path $batchPath "manifest.json") -Algorithm SHA256).Hash
+    $cloudManifestHash = (Get-FileHash -LiteralPath (Join-Path $destination "manifest.json") -Algorithm SHA256).Hash
+    if ($localManifestHash -eq $cloudManifestHash) {
+      Write-Host "Verified Tianji backup batch is already synced to Z drive: $destination" -ForegroundColor Green
+      return
+    }
+    throw "Cloud backup batch ID conflicts with different content: $destination"
+  }
   if (Test-Path -LiteralPath $temporaryDestination) { throw "Cloud temporary backup batch already exists: $temporaryDestination" }
   New-Item -ItemType Directory -Path $temporaryDestination -Force | Out-Null
   Copy-Item -Path (Join-Path $batchPath "*") -Destination $temporaryDestination -Recurse -Force
