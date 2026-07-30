@@ -1,8 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
-import { getShanghaiWeekRange } from "../common/shanghai-time";
-import { WEEKLY_PLAN_ITEM_STATUS, WEEKLY_PLAN_MANAGER_ROLES, WEEKLY_PLAN_DESIGNER_ROLE } from "./weekly-plan.constants";
-import { UpsertWeeklyDesignerPlanDto } from "./dto/upsert-weekly-designer-plan.dto";
+import { formatShanghaiDate, getShanghaiWeekRange, getShanghaiWeekRangeForWeekStart } from "../common/shanghai-time";
+import { FINAL_IMAGE_TASK_STATUSES, WEEKLY_PLAN_DESIGNER_ROLE, WEEKLY_PLAN_ITEM_STATUS, WEEKLY_PLAN_MANAGER_ROLES } from "./weekly-plan.constants";
 
 type WeekRange = { start: Date; end: Date };
 
@@ -22,28 +21,17 @@ export class WeeklyDesignerPlansService {
     }
   }
 
-  private shanghaiDate(value: Date) {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(value);
-  }
-
   private resolveRange(weekStart?: string): WeekRange {
     if (!weekStart) return getShanghaiWeekRange();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
-      throw new BadRequestException("weekStart must use YYYY-MM-DD");
-    }
-    const anchor = new Date(`${weekStart}T12:00:00+08:00`);
-    if (Number.isNaN(anchor.getTime())) throw new BadRequestException("Invalid plan week");
-    const range = getShanghaiWeekRange(anchor);
-    if (this.shanghaiDate(range.start) !== weekStart) {
-      throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai");
-    }
+    const range = getShanghaiWeekRangeForWeekStart(weekStart);
+    if (!range) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai and use YYYY-MM-DD");
     return range;
   }
 
   private assertWritableRange(range: WeekRange) {
     const current = getShanghaiWeekRange();
-    const offset = range.start.getTime() - current.start.getTime();
-    if (offset !== 0 && offset !== 7 * 24 * 60 * 60 * 1000) {
+    const next = getShanghaiWeekRange(new Date(current.start.getTime() + 7 * 24 * 60 * 60 * 1000));
+    if (range.start.getTime() !== current.start.getTime() && range.start.getTime() !== next.start.getTime()) {
       throw new ForbiddenException("Only the current or next Shanghai week can be changed");
     }
   }
@@ -56,188 +44,176 @@ export class WeeklyDesignerPlansService {
     });
   }
 
-  private async assertDesigner(designerId: number) {
-    const designer = await this.prisma.user.findFirst({
-      where: { id: designerId, isActive: true, role: { name: WEEKLY_PLAN_DESIGNER_ROLE } },
-      select: { id: true, username: true, displayName: true },
-    });
-    if (!designer) throw new NotFoundException("Active designer not found");
-    return designer;
-  }
-
   async initializeWeek(weekStart: string, userId: number, role: string) {
     this.assertManager(role);
     const range = this.resolveRange(weekStart);
     this.assertWritableRange(range);
-    const designers = await this.activeDesigners();
-    const result = await this.prisma.$transaction(async (tx: any) => {
-      const weeklyPlan = await tx.weeklyPlan.upsert({
+    const weeklyPlan = await this.prisma.$transaction(async (tx: any) => {
+      const plan = await tx.weeklyPlan.upsert({
         where: { weekStart: range.start },
         create: { weekStart: range.start, weekEnd: range.end, status: "DRAFT", createdById: userId },
         update: {},
-      });
-      const created: number[] = [];
-      for (const designer of designers) {
-        const existing = await tx.weeklyDesignerPlan.findUnique({
-          where: { designerId_weekStart: { designerId: designer.id, weekStart: range.start } },
-        });
-        if (!existing) {
-          const plan = await tx.weeklyDesignerPlan.create({
-            data: { designerId: designer.id, weekStart: range.start, weekEnd: range.end, targetImageCount: 0, createdById: userId },
-          });
-          created.push(plan.id);
-        }
-      }
-      return { created, weeklyPlan };
-    });
-    return { weekStart: range.start, weekEnd: range.end, createdCount: result.created.length, designerCount: designers.length, weeklyPlanId: result.weeklyPlan.id };
-  }
-
-  async upsertTarget(dto: UpsertWeeklyDesignerPlanDto, userId: number, role: string) {
-    this.assertManager(role);
-    const range = this.resolveRange(dto.weekStart);
-    this.assertWritableRange(range);
-    await this.assertDesigner(dto.designerId);
-    const reason = dto.reason.trim();
-    const target = Number(dto.targetImageCount);
-    return this.prisma.$transaction(async (tx: any) => {
-      await tx.weeklyPlan.upsert({
-        where: { weekStart: range.start },
-        create: { weekStart: range.start, weekEnd: range.end, status: "DRAFT", createdById: userId },
-        update: {},
-      });
-      const existing = await tx.weeklyDesignerPlan.findUnique({
-        where: { designerId_weekStart: { designerId: dto.designerId, weekStart: range.start } },
-      });
-      if (!existing) {
-        const created = await tx.weeklyDesignerPlan.create({
-          data: { designerId: dto.designerId, weekStart: range.start, weekEnd: range.end, targetImageCount: target, createdById: userId },
-        });
-        await tx.auditEvent.create({
-          data: { resourceType: "weekly_designer_plan", resourceId: created.id, action: "weekly_designer_plan_created", operatorId: userId, metadata: JSON.stringify({ designerId: dto.designerId, weekStart: range.start.toISOString(), targetImageCount: target, reason }) },
-        });
-        return { plan: created, created: true, adjusted: false };
-      }
-      if (existing.targetImageCount === target) return { plan: existing, created: false, adjusted: false };
-      const updated = await tx.weeklyDesignerPlan.update({ where: { id: existing.id }, data: { targetImageCount: target } });
-      await tx.weeklyDesignerPlanAdjustment.create({
-        data: { planId: existing.id, previousTarget: existing.targetImageCount, newTarget: target, reason, adjustedById: userId },
       });
       await tx.auditEvent.create({
-        data: { resourceType: "weekly_designer_plan", resourceId: existing.id, action: "weekly_designer_plan_adjusted", operatorId: userId, metadata: JSON.stringify({ designerId: dto.designerId, weekStart: range.start.toISOString(), previousTarget: existing.targetImageCount, newTarget: target, reason }) },
+        data: {
+          resourceType: "weekly_plan",
+          resourceId: plan.id,
+          action: "weekly_plan_initialized",
+          operatorId: userId,
+          metadata: JSON.stringify({ weekStart: formatShanghaiDate(range.start) }),
+        },
       });
-      return { plan: updated, created: false, adjusted: true };
+      return plan;
     });
+    return { weekStart: formatShanghaiDate(range.start), weekEnd: formatShanghaiDate(range.end), weeklyPlanId: weeklyPlan.id, status: weeklyPlan.status };
   }
 
   async getWeekOverview(userId: number, role: string, weekStart?: string) {
     this.assertReadable(role);
     const range = this.resolveRange(weekStart);
-    const [designers, targetPlans, weeklyPlan, completedTasks] = await Promise.all([
+    const [designers, weeklyPlan] = await Promise.all([
       this.activeDesigners(),
-      this.prisma.weeklyDesignerPlan.findMany({
-        where: { weekStart: range.start },
-        include: { designer: { select: { id: true, username: true, displayName: true, isActive: true } } },
-      }),
       this.prisma.weeklyPlan.findUnique({
         where: { weekStart: range.start },
         include: {
           items: {
             where: { status: { not: WEEKLY_PLAN_ITEM_STATUS.CANCELLED }, imageTask: { deletedAt: null, task: { deletedAt: null } } },
-            include: { imageTask: { select: { id: true, taskId: true, imageTitle: true, status: true, designerId: true, approvedAt: true, task: { select: { id: true, serialNumber: true, productCode: true, workflowStatus: true, store: { select: { name: true } }, requirementType: { select: { name: true } } } } } }, designer: { select: { id: true, username: true, displayName: true } } },
+            include: {
+              designer: { select: { id: true, username: true, displayName: true } },
+              imageTask: {
+                select: {
+                  id: true, taskId: true, imageTitle: true, status: true, designerId: true, approvedAt: true,
+                  task: { select: { id: true, serialNumber: true, productCode: true, workflowStatus: true, store: { select: { name: true } }, requirementType: { select: { name: true } } } },
+                },
+              },
+            },
           },
         },
       }),
-      this.prisma.imageTask.findMany({
-        where: { deletedAt: null, designerId: { not: null }, approvedAt: { gte: range.start, lt: range.end }, task: { deletedAt: null } },
-        select: { id: true, designerId: true },
-      }),
     ]);
 
-    const planByDesigner = new Map(targetPlans.map((plan) => [plan.designerId, plan]));
-    const completedByDesigner = new Map<number, number>();
-    completedTasks.forEach((task) => completedByDesigner.set(task.designerId!, (completedByDesigner.get(task.designerId!) || 0) + 1));
-    const allDesigners = new Map<number, { id: number; username: string; displayName: string }>();
-    designers.forEach((designer) => allDesigners.set(designer.id, designer));
-    targetPlans.forEach((plan) => allDesigners.set(plan.designerId, plan.designer));
+    const allItems = weeklyPlan?.items || [];
+    const visibleItems = role === WEEKLY_PLAN_DESIGNER_ROLE ? allItems.filter((item) => item.designerId === userId) : allItems;
+    const visibleDesignerIds = role === WEEKLY_PLAN_DESIGNER_ROLE ? [userId] : designers.map((designer) => designer.id);
+    const designerById = new Map(designers.map((designer) => [designer.id, designer]));
+    const assignmentAnomalies = visibleItems
+      .filter((item) => item.designerId !== item.imageTask.designerId)
+      .map((item) => ({ imageTaskId: item.imageTaskId, taskId: item.imageTask.taskId, plannedDesignerId: item.designerId, currentDesignerId: item.imageTask.designerId }));
 
-    const rows = [...allDesigners.values()].map((designer) => {
-      const memberships = (weeklyPlan?.items || []).filter((item) => item.designerId === designer.id && item.imageTask.designerId === designer.id);
-      const targetPlan = planByDesigner.get(designer.id);
-      const targetImageCount = targetPlan?.targetImageCount || 0;
-      const assignedCount = memberships.length;
+    const rows = visibleDesignerIds.map((designerId) => {
+      const designer = designerById.get(designerId) || { id: designerId, username: "-", displayName: "-" };
+      const memberships = visibleItems.filter((item) => item.designerId === designerId && item.imageTask.designerId === designerId);
+      const plannedImageCount = memberships.length;
+      const completedCount = memberships.filter((item) => item.imageTask.approvedAt && item.imageTask.approvedAt >= range.start && item.imageTask.approvedAt < range.end && FINAL_IMAGE_TASK_STATUSES.includes(item.imageTask.status)).length;
+      const inProgressCount = memberships.filter((item) => item.imageTask.status === "IN_PROGRESS").length;
       const pendingReviewCount = memberships.filter((item) => item.imageTask.status === "SUBMITTED_FOR_REVIEW").length;
-      const completedCount = completedByDesigner.get(designer.id) || 0;
-      const remainingTargetCount = Math.max(targetImageCount - completedCount, 0);
-      const completionRate = targetImageCount ? Math.round((completedCount / targetImageCount) * 1000) / 10 : null;
+      const revisionCount = memberships.filter((item) => item.imageTask.status === "REVISION_REQUIRED").length;
+      const decreeCount = new Set(memberships.map((item) => item.imageTask.taskId)).size;
       return {
-        designerId: designer.id,
+        designerId,
         designerName: designer.displayName || designer.username,
-        targetPlanId: targetPlan?.id || null,
-        targetImageCount,
-        assignedCount,
-        completedCount,
+        decreeCount,
+        plannedImageCount,
+        assignedCount: plannedImageCount,
+        inProgressCount,
         pendingReviewCount,
-        remainingTargetCount,
-        completionRate,
-        isOverTarget: targetImageCount > 0 && completedCount > targetImageCount,
+        completedCount,
+        revisionCount,
+        remainingCount: Math.max(plannedImageCount - completedCount, 0),
+        completionRate: plannedImageCount ? Math.round((completedCount / plannedImageCount) * 1000) / 10 : null,
       };
     }).sort((left, right) => left.designerName.localeCompare(right.designerName, "zh-CN"));
 
-    const visibleRows = role === WEEKLY_PLAN_DESIGNER_ROLE ? rows.filter((row) => row.designerId === userId) : rows;
-    const visibleItems = role === WEEKLY_PLAN_DESIGNER_ROLE ? (weeklyPlan?.items || []).filter((item) => item.designerId === userId) : (weeklyPlan?.items || []);
-    const decrees = [...new Map(visibleItems.map((item) => [item.imageTask.taskId, item])).values()].map((item) => ({
-      taskId: item.imageTask.task.id,
-      serialNumber: item.imageTask.task.serialNumber,
-      storeName: item.imageTask.task.store?.name || "-",
-      productCode: item.imageTask.task.productCode || "-",
-      requirementType: item.imageTask.task.requirementType?.name || "-",
-      imageCount: visibleItems.filter((entry) => entry.imageTask.taskId === item.imageTask.taskId).length,
-      designerName: item.designer.displayName || item.designer.username,
-      workflowStatus: item.imageTask.task.workflowStatus,
-      plannedAt: item.plannedAt,
-    }));
-    const summary = visibleRows.reduce((total, row) => ({
-      targetImageCount: total.targetImageCount + row.targetImageCount,
+    const decrees = [...new Map(visibleItems.map((item) => [item.imageTask.taskId, item])).values()].map((item) => {
+      const decreeItems = visibleItems.filter((entry) => entry.imageTask.taskId === item.imageTask.taskId);
+      const designerIds = [...new Set(decreeItems.map((entry) => entry.designerId))];
+      return {
+        taskId: item.imageTask.task.id,
+        serialNumber: item.imageTask.task.serialNumber,
+        storeName: item.imageTask.task.store?.name || "-",
+        productCode: item.imageTask.task.productCode || "-",
+        requirementType: item.imageTask.task.requirementType?.name || "-",
+        plannedImageCount: decreeItems.length,
+        designerId: designerIds.length === 1 ? designerIds[0] : null,
+        designerName: designerIds.length === 1 ? (decreeItems[0]?.designer.displayName || decreeItems[0]?.designer.username || "-") : "数据异常",
+        workflowStatus: item.imageTask.task.workflowStatus,
+        plannedAt: item.plannedAt,
+        isAssignmentAnomaly: designerIds.length !== 1 || decreeItems.some((entry) => entry.designerId !== entry.imageTask.designerId),
+        isCompleted: decreeItems.every((entry) => FINAL_IMAGE_TASK_STATUSES.includes(entry.imageTask.status)),
+      };
+    });
+
+    const summary = rows.reduce((total, row) => ({
+      decreeCount: total.decreeCount + row.decreeCount,
+      plannedImageCount: total.plannedImageCount + row.plannedImageCount,
       assignedCount: total.assignedCount + row.assignedCount,
-      completedCount: total.completedCount + row.completedCount,
+      inProgressCount: total.inProgressCount + row.inProgressCount,
       pendingReviewCount: total.pendingReviewCount + row.pendingReviewCount,
-      remainingTargetCount: total.remainingTargetCount + row.remainingTargetCount,
-      overTargetCount: total.overTargetCount + (row.isOverTarget ? 1 : 0),
-    }), { targetImageCount: 0, assignedCount: 0, completedCount: 0, pendingReviewCount: 0, remainingTargetCount: 0, overTargetCount: 0 });
+      completedCount: total.completedCount + row.completedCount,
+      revisionCount: total.revisionCount + row.revisionCount,
+      remainingCount: total.remainingCount + row.remainingCount,
+    }), { decreeCount: 0, plannedImageCount: 0, assignedCount: 0, inProgressCount: 0, pendingReviewCount: 0, completedCount: 0, revisionCount: 0, remainingCount: 0 });
+
+    const currentRange = getShanghaiWeekRange();
+    const nextRange = getShanghaiWeekRange(new Date(currentRange.start.getTime() + 7 * 24 * 60 * 60 * 1000));
+    const isHistorical = range.start.getTime() < currentRange.start.getTime();
+    const canConfigure = WEEKLY_PLAN_MANAGER_ROLES.includes(role)
+      && [currentRange.start.getTime(), nextRange.start.getTime()].includes(range.start.getTime());
+
     return {
-      weekStart: range.start,
-      weekEnd: range.end,
+      weekStart: formatShanghaiDate(range.start),
+      weekEnd: formatShanghaiDate(range.end),
       plan: weeklyPlan ? { id: weeklyPlan.id, status: weeklyPlan.status } : null,
       canManage: WEEKLY_PLAN_MANAGER_ROLES.includes(role),
-      canConfigure: WEEKLY_PLAN_MANAGER_ROLES.includes(role) && [getShanghaiWeekRange().start.getTime(), getShanghaiWeekRange(new Date(getShanghaiWeekRange().start.getTime() + 7 * 24 * 60 * 60 * 1000)).start.getTime()].includes(range.start.getTime()),
-      isHistorical: range.start.getTime() < getShanghaiWeekRange().start.getTime(),
-      summary: { ...summary, designerCount: visibleRows.length, imageCount: summary.assignedCount, remainingCount: summary.remainingTargetCount, decreeCount: decrees.length, completionRate: summary.targetImageCount ? Math.round((summary.completedCount / summary.targetImageCount) * 1000) / 10 : null },
-      designers: visibleRows.map((row) => ({ ...row, imageCount: row.assignedCount, remainingCount: row.remainingTargetCount })),
+      canConfigure,
+      isHistorical,
+      summary: { ...summary, designerCount: rows.length, completionRate: summary.plannedImageCount ? Math.round((summary.completedCount / summary.plannedImageCount) * 1000) / 10 : null },
+      designers: rows,
       decrees,
+      assignmentAnomalies,
     };
   }
 
-  async getAdjustments(userId: number, role: string, weekStart?: string) {
-    this.assertReadable(role);
+  async removeDecreeFromPlan(taskId: number, weekStart: string, reason: string, userId: number, role: string) {
+    this.assertManager(role);
     const range = this.resolveRange(weekStart);
-    const where: any = { plan: { weekStart: range.start } };
-    if (role === WEEKLY_PLAN_DESIGNER_ROLE) where.plan.designerId = userId;
-    return this.prisma.weeklyDesignerPlanAdjustment.findMany({
-      where,
-      include: { plan: { include: { designer: { select: { id: true, username: true, displayName: true } } } }, adjustedBy: { select: { id: true, username: true, displayName: true } } },
-      orderBy: { adjustedAt: "desc" },
+    this.assertWritableRange(range);
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) throw new BadRequestException("A removal reason is required");
+    return this.prisma.$transaction(async (tx: any) => {
+      const plan = await tx.weeklyPlan.findUnique({
+        where: { weekStart: range.start },
+        include: { items: { where: { imageTask: { taskId, deletedAt: null } }, include: { imageTask: { select: { status: true, designerId: true } } } } },
+      });
+      if (!plan || !plan.items.length) throw new BadRequestException("This decree is not in the selected weekly plan");
+      if (plan.items.some((item: any) => item.status !== WEEKLY_PLAN_ITEM_STATUS.PLANNED || item.imageTask.status !== "NOT_STARTED")) {
+        throw new ForbiddenException("Only decrees whose image tasks have not started can be removed from the plan");
+      }
+      const removedAt = new Date();
+      for (const item of plan.items) {
+        await tx.weeklyPlanItem.update({ where: { id: item.id }, data: { status: WEEKLY_PLAN_ITEM_STATUS.CANCELLED, cancelledAt: removedAt, cancelledById: userId, cancelReason: trimmedReason } });
+      }
+      await tx.auditEvent.create({
+        data: { resourceType: "weekly_plan", resourceId: plan.id, action: "weekly_plan_decree_removed", operatorId: userId, metadata: JSON.stringify({ taskId, weekStart: formatShanghaiDate(range.start), reason: trimmedReason, removedAt: removedAt.toISOString(), imageTaskCount: plan.items.length }) },
+      });
+      return { taskId, removedImageCount: plan.items.length, removedAt };
     });
   }
 
   async getUnassigned(_userId: number, role: string) {
     this.assertManager(role);
     const tasks = await this.prisma.task.findMany({
-      where: { deletedAt: null, workflowStatus: "OPS_APPROVED", imageTasks: { some: { deletedAt: null, status: "PENDING_ASSIGNMENT", designerId: null } } },
-      include: { store: { select: { name: true } }, requirementType: { select: { name: true } }, creator: { select: { displayName: true, username: true } }, imageTasks: { where: { deletedAt: null, status: "PENDING_ASSIGNMENT", designerId: null }, select: { id: true } } },
+      where: {
+        deletedAt: null,
+        workflowStatus: "OPS_APPROVED",
+        imageTasks: { some: { deletedAt: null } },
+      },
+      include: { store: { select: { name: true } }, requirementType: { select: { name: true } }, creator: { select: { displayName: true, username: true } }, imageTasks: { where: { deletedAt: null }, select: { id: true, status: true, designerId: true } } },
       orderBy: { updatedAt: "asc" },
     });
-    const items = tasks.map((task) => ({ id: task.id, serialNumber: task.serialNumber, storeName: task.store?.name || "-", productCode: task.productCode || "-", requirementType: task.requirementType?.name || task.taskType || "-", requesterName: task.creator.displayName || task.creator.username, priority: task.priority, imageCount: task.imageTasks.length }));
+    const items = tasks
+      .filter((task) => task.imageTasks.length > 0 && task.imageTasks.every((imageTask) => imageTask.status === "PENDING_ASSIGNMENT" && !imageTask.designerId))
+      .map((task) => ({ id: task.id, serialNumber: task.serialNumber, storeName: task.store?.name || "-", productCode: task.productCode || "-", requirementType: task.requirementType?.name || task.taskType || "-", requesterName: task.creator.displayName || task.creator.username, priority: task.priority, imageCount: task.imageTasks.length }));
     return { items, total: items.length, imageCount: items.reduce((total, item) => total + item.imageCount, 0) };
   }
 
@@ -246,11 +222,7 @@ export class WeeklyDesignerPlansService {
     const range = this.resolveRange(weekStart);
     const plan = await this.prisma.weeklyPlan.findUnique({ where: { weekStart: range.start } });
     if (!plan) return [];
-    const events = await this.prisma.auditEvent.findMany({
-      where: { resourceType: "weekly_plan", resourceId: plan.id },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
+    const events = await this.prisma.auditEvent.findMany({ where: { resourceType: "weekly_plan", resourceId: plan.id }, orderBy: { createdAt: "desc" }, take: 100 });
     const operatorIds = [...new Set(events.map((event) => event.operatorId).filter((id): id is number => Boolean(id)))];
     const operators = await this.prisma.user.findMany({ where: { id: { in: operatorIds } }, select: { id: true, username: true, displayName: true } });
     const operatorMap = new Map(operators.map((operator) => [operator.id, operator]));

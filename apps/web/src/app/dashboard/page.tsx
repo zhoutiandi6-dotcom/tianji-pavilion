@@ -236,12 +236,12 @@ export default function DashboardPage() {
         >
           <Row gutter={[12, 12]}>
             {[
-              ["计划总数", weeklyPlan.summary?.targetImageCount || 0],
+              ["计划图片数", weeklyPlan.summary?.plannedImageCount || 0],
               ["已分配", weeklyPlan.summary?.assignedCount || 0],
               ["设计完成", weeklyPlan.summary?.completedCount || 0],
               ["待审核", weeklyPlan.summary?.pendingReviewCount || 0],
-              ["剩余数量", weeklyPlan.summary?.remainingTargetCount || 0],
-              ["完成率", weeklyPlan.summary?.completionRate === null ? "未设置" : `${weeklyPlan.summary?.completionRate || 0}%`],
+              ["剩余数量", weeklyPlan.summary?.remainingCount || 0],
+              ["完成率", weeklyPlan.summary?.completionRate === null ? "0%" : `${weeklyPlan.summary?.completionRate || 0}%`],
             ].map(([title, value]) => (
               <Col xs={12} md={8} xl={4} key={String(title)}><Statistic title={title} value={value as any} /></Col>
             ))}
@@ -255,7 +255,7 @@ export default function DashboardPage() {
               <List.Item>
                 <Space wrap>
                   <Text strong>{item.designerName}</Text>
-                  <Text type="secondary">计划 {item.targetImageCount} 张</Text>
+                  <Text type="secondary">计划 {item.plannedImageCount} 张</Text>
                   <Text type="secondary">已分配 {item.assignedCount} 张</Text>
                   <Text type="secondary">完成 {item.completedCount} 张</Text>
                   <Tag color={item.completionRate === null ? "default" : item.completionRate >= 100 ? "success" : "processing"}>

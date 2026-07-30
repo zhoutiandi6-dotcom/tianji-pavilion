@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
-import { getShanghaiWeekRange } from "../common/shanghai-time";
+import { formatShanghaiDate, getShanghaiWeekRange, getShanghaiWeekRangeForWeekStart } from "../common/shanghai-time";
 import { WEEKLY_OPERATIONS_APPROVAL_MANAGER_ROLES } from "./weekly-plan.constants";
 
 type WeekRange = { start: Date; end: Date };
@@ -18,17 +18,10 @@ export class WeeklyOperationsApprovalPlansService {
     }
   }
 
-  private formatShanghaiDate(value: Date) {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(value);
-  }
-
   private resolveRange(weekStart?: string): WeekRange {
     if (!weekStart) return getShanghaiWeekRange();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new BadRequestException("weekStart must use YYYY-MM-DD");
-    const anchor = new Date(`${weekStart}T12:00:00+08:00`);
-    if (Number.isNaN(anchor.getTime())) throw new BadRequestException("Invalid plan week");
-    const range = getShanghaiWeekRange(anchor);
-    if (this.formatShanghaiDate(range.start) !== weekStart) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai");
+    const range = getShanghaiWeekRangeForWeekStart(weekStart);
+    if (!range) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai and use YYYY-MM-DD");
     return range;
   }
 
@@ -60,7 +53,7 @@ export class WeeklyOperationsApprovalPlansService {
         resourceId: plan.id,
         action: "weekly_operations_approval_plan_initialized",
         operatorId: createdById,
-        metadata: JSON.stringify({ weekStart: range.start.toISOString() }),
+        metadata: JSON.stringify({ weekStart: formatShanghaiDate(range.start) }),
       },
     });
     return { plan, created: true };
@@ -80,7 +73,7 @@ export class WeeklyOperationsApprovalPlansService {
     this.assertWritableRange(range);
     return this.prisma.$transaction(async (tx: any) => {
       const result = await this.getOrCreatePlan(tx, range, userId, userId);
-      return { ...result, weekStart: range.start, weekEnd: range.end };
+      return { ...result, weekStart: formatShanghaiDate(range.start), weekEnd: formatShanghaiDate(range.end) };
     });
   }
 
@@ -121,7 +114,7 @@ export class WeeklyOperationsApprovalPlansService {
         submissionType: task.submissionRecords[0]?.submissionType || "INITIAL",
         workflowStatus: task.workflowStatus,
       }));
-    return { weekStart: range.start, planId: plan?.id || null, items, total: items.length };
+    return { weekStart: formatShanghaiDate(range.start), planId: plan?.id || null, items, total: items.length };
   }
 
   async addDecrees(dto: { weekStart: string; decreeIds: number[] }, userId: number, role: string) {
@@ -204,7 +197,7 @@ export class WeeklyOperationsApprovalPlansService {
       const movedAt = new Date();
       const imageCount = await this.activeImageCount(tx, item.decreeId);
       if (!imageCount) throw new BadRequestException("Decree has no active image tasks");
-      const removedReason = `Moved to ${this.formatShanghaiDate(targetRange.start)}: ${reason.trim()}`;
+      const removedReason = `Moved to ${formatShanghaiDate(targetRange.start)}: ${reason.trim()}`;
       const sourceUpdate = await tx.weeklyOperationsApprovalPlanItem.updateMany({
         where: { id: item.id, removedAt: null },
         data: { removedAt: movedAt, removedById: userId, removedReason },
@@ -232,7 +225,7 @@ export class WeeklyOperationsApprovalPlansService {
           metadata: JSON.stringify({ decreeId: item.decreeId, sourceItemId: item.id, destinationItemId: destination.id, fromWeekStart: item.plan.weekStart.toISOString(), toWeekStart: targetRange.start.toISOString(), imageCount, reason: reason.trim(), movedAt: movedAt.toISOString() }),
         },
       });
-      return { itemId: destination.id, fromWeekStart: item.plan.weekStart, toWeekStart: targetRange.start, movedAt };
+      return { itemId: destination.id, fromWeekStart: formatShanghaiDate(item.plan.weekStart), toWeekStart: formatShanghaiDate(targetRange.start), movedAt };
     });
   }
 
@@ -335,8 +328,8 @@ export class WeeklyOperationsApprovalPlansService {
     const current = getShanghaiWeekRange();
     const next = getShanghaiWeekRange(new Date(current.start.getTime() + 7 * 24 * 60 * 60 * 1000));
     return {
-      weekStart: range.start,
-      weekEnd: range.end,
+      weekStart: formatShanghaiDate(range.start),
+      weekEnd: formatShanghaiDate(range.end),
       plan: plan ? { id: plan.id, createdAt: plan.createdAt, updatedAt: plan.updatedAt } : null,
       items,
       isHistorical: range.start.getTime() < current.start.getTime(),

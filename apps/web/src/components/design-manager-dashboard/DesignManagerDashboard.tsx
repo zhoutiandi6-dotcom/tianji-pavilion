@@ -140,15 +140,13 @@ export default function DesignManagerDashboard({ data, user, roleData }: Dashboa
   const plan = roleData?.weeklyPlan || data.weeklyPlan;
   const planSummary = plan?.summary;
   const planDesigners = plan?.designers || [];
+  const planStatus = plan?.plan?.status || 'NOT_CREATED';
   const notStarted = cardValue(cards, 'NOT_STARTED');
   const inProgress = cardValue(cards, 'IN_PROGRESS');
-  const hasWeeklyPlan = Boolean(plan?.plan) || planDesigners.some((designer: any) => Boolean(designer.targetPlanId));
-  const planTotal = Number(planSummary?.targetImageCount || 0);
   const assignedCount = Number(planSummary?.assignedCount || 0);
   const planDone = Number(planSummary?.completedCount || 0);
-  const planRate = planSummary?.completionRate === null || planSummary?.completionRate === undefined
-    ? 0
-    : Math.min(100, Math.round(Number(planSummary.completionRate)));
+  const planRemaining = Math.max(assignedCount - planDone, 0);
+  const planRate = assignedCount ? Math.min(100, Math.round((planDone / assignedCount) * 100)) : 0;
   const today = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(new Date());
 
   const routeToScope = (scope: 'design-assignment' | 'design-reviews') => router.push(`/dashboard/fazhi?scope=${scope}`);
@@ -188,12 +186,14 @@ export default function DesignManagerDashboard({ data, user, roleData }: Dashboa
 
         <article className={styles.planCard}>
           <div className={styles.planTitle}><h2>本周任务计划</h2><span>真实周目标数据</span></div>
-          {hasWeeklyPlan ? (
+          {planStatus === 'ACTIVE' ? (
             <div className={styles.planContent}>
               <div className={styles.planRate}><strong>{planRate}%</strong><span>本周计划完成率</span></div>
-              <div className={styles.planProgress}><b>已完成 {planDone} / 当前计划 {planTotal}</b><Progress percent={planRate} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>已分配 {assignedCount} 张 · 剩余 {Number(planSummary?.remainingCount || 0)} 张</span></div>
+              <div className={styles.planProgress}><b>已完成 {planDone} / 当前计划 {assignedCount}</b><Progress percent={planRate} showInfo={false} strokeColor="#111" trailColor="#dedede" /><span>已分配 {assignedCount} 张 · 剩余 {planRemaining} 张</span></div>
               <div className={styles.planDetails}><span>涉及法旨 <b>{Number(planSummary?.decreeCount || 0)} 道</b></span><span>待审核 <b>{Number(planSummary?.pendingReviewCount || 0)} 张</b></span><span>涉及设计师 <b>{Number(planSummary?.designerCount || 0)} 人</b></span><button type="button" onClick={() => router.push('/dashboard/weekly-designer-plans')}>管理本周计划</button></div>
             </div>
+          ) : planStatus === 'DRAFT' ? (
+            <div className={styles.noPlan}><strong>本周计划尚未启用</strong><span>已建立草稿计划，首次正式分配图片任务后将自动启用。</span><Button onClick={() => router.push('/dashboard/weekly-designer-plans')}>管理本周计划</Button></div>
           ) : (
             <div className={styles.noPlan}><strong>尚未建立本周计划</strong><span>当前待分配：{unassigned} 道法旨，请在本周计划中统一安排。</span><Button onClick={() => router.push('/dashboard/weekly-designer-plans?tab=unassigned')}>管理本周计划</Button></div>
           )}
@@ -203,12 +203,12 @@ export default function DesignManagerDashboard({ data, user, roleData }: Dashboa
       <TrendChart data={roleData?.trend} />
 
       <article className={styles.designersCard}>
-        <div className={styles.cardHeading}><div><h2>设计师本周任务进度</h2><span>{hasWeeklyPlan ? (planTotal ? '当前周已纳入法旨' : '本周计划已建立，等待纳入图片任务') : '暂未建立本周计划'}</span></div><span className={styles.dataHint}>数据来自本周计划接口</span></div>
+        <div className={styles.cardHeading}><div><h2>设计师本周任务进度</h2><span>{planStatus === 'ACTIVE' ? (assignedCount ? '当前周已纳入图片任务' : '本周计划已启用，等待纳入图片任务') : planStatus === 'DRAFT' ? '本周计划尚未启用' : '暂未建立本周计划'}</span></div><span className={styles.dataHint}>数据来自本周计划接口</span></div>
         {planDesigners.length ? <div className={styles.designerColumns}>{planDesigners.slice(0, 4).map((designer: any) => {
-          const target = Number(designer.targetImageCount || 0);
+          const assigned = Number(designer.assignedCount || 0);
           const done = Number(designer.completedCount || 0);
-          const rate = designer.completionRate === null || designer.completionRate === undefined ? null : Math.min(100, Math.round(Number(designer.completionRate)));
-          return <div className={styles.designerColumn} key={designer.designerId}><div><strong>{designer.designerName}</strong><b>{rate === null ? '-' : `${rate}%`}</b></div><span>{target ? `已完成 ${done} / 当前有效图片 ${target}` : '暂未纳入本周法旨'}</span><small>{target ? `剩余 ${Number(designer.remainingCount || 0)} 张` : '暂未纳入本周法旨'}</small>{rate !== null && <Progress percent={rate} showInfo={false} strokeColor="#111" trailColor="#dfdfdd" />}</div>;
+          const rate = assigned ? Math.min(100, Math.round((done / assigned) * 100)) : null;
+          return <div className={styles.designerColumn} key={designer.designerId}><div><strong>{designer.designerName}</strong><b>{rate === null ? '-' : `${rate}%`}</b></div><span>{assigned ? `已完成 ${done} / 当前计划 ${assigned}` : '暂未纳入本周图片任务'}</span><small>{assigned ? `剩余 ${Math.max(assigned - done, 0)} 张` : '暂未纳入本周图片任务'}</small>{rate !== null && <Progress percent={rate} showInfo={false} strokeColor="#111" trailColor="#dfdfdd" />}</div>;
         })}</div> : <div className={styles.emptyWrap}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无在职设计师计划数据" /></div>}
       </article>
 

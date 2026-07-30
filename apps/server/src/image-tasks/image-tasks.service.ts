@@ -186,6 +186,7 @@ export class ImageTasksService {
     userId: number,
     mode: "ASSIGN" | "REASSIGN",
     weekStart?: string,
+    reason?: string,
   ) {
     const assignedAt = new Date();
     const assignmentType = mode === "ASSIGN" ? "INITIAL" : "REASSIGN";
@@ -197,7 +198,10 @@ export class ImageTasksService {
         });
         await this.createAssignmentAudit(tx, item, designerId, userId, assignedAt, assignmentType);
       }
-      await this.weeklyPlans.addAssignedTasksInTransaction(tx, imageTasks, designerId, userId, assignedAt, assignmentType, weekStart);
+      await this.weeklyPlans.addAssignedTasksInTransaction(tx, imageTasks, designerId, userId, assignedAt, assignmentType, weekStart, reason);
+      for (const taskId of [...new Set(imageTasks.map((item) => item.taskId))]) {
+        await this.workflowEngine.recalcTaskStatusInTransaction(tx, taskId);
+      }
     });
     for (const item of imageTasks) {
       await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(item.id, item.taskId, designerId));
@@ -209,22 +213,39 @@ export class ImageTasksService {
         content: `${mode === "ASSIGN" ? "分配" : "改派"}设计师：${item.imageTitle || `#${item.imageIndex}`}`,
       });
     }
-    await Promise.all([...new Set(imageTasks.map((item) => item.taskId))].map((taskId) => this.workflowEngine.recalcTaskStatus(taskId)));
   }
 
   async batchAssignTasks(dto: BatchAssignTasksDto, userId: number, userRole: string) {
     if (!["DESIGN_MANAGER", ...ADMIN_ROLES].includes(userRole)) throw new ForbiddenException("仅设计主管或管理员可批量分配设计师");
     const taskIds = Array.from(new Set(dto.taskIds.map(Number))).slice(0, 100);
     await this.ensureDesigner(dto.designerId);
-    const tasks = await this.prisma.task.findMany({ where: { id: { in: taskIds }, deletedAt: null }, include: { imageTasks: true } });
+    const tasks = await this.prisma.task.findMany({ where: { id: { in: taskIds }, deletedAt: null }, include: { imageTasks: { where: { deletedAt: null } } } });
     if (tasks.length !== taskIds.length) throw new NotFoundException("存在法旨不存在或已删除");
     const expectedWorkflow = dto.mode === "ASSIGN" ? "OPS_APPROVED" : "DESIGN_ASSIGNED";
     if (tasks.some((task) => task.workflowStatus !== expectedWorkflow)) throw new ForbiddenException("所选法旨的状态不满足本次批量操作");
+    const invalidTask = tasks.find((task) => {
+      if (!task.imageTasks.length) return true;
+      if (dto.mode === "ASSIGN") return task.imageTasks.some((item) => item.status !== "PENDING_ASSIGNMENT" || !!item.designerId);
+      const owners = new Set(task.imageTasks.map((item) => item.designerId).filter((id): id is number => !!id));
+      return task.imageTasks.some((item) => item.status !== "NOT_STARTED" || !item.designerId) || owners.size !== 1;
+    });
+    if (invalidTask) {
+      if (dto.mode === "REASSIGN") {
+        const ownerIds = new Set((invalidTask.imageTasks || []).map((item: any) => item.designerId).filter(Boolean));
+        if (ownerIds.size > 1) {
+          throw new BadRequestException("Data anomaly: this decree has multiple designers. Normalize its owner with an explicit whole-decree reassignment before changing its weekly plan.");
+        }
+      }
+      throw new BadRequestException(dto.mode === "ASSIGN"
+        ? "A decree can be assigned only when every effective image task is pending assignment"
+        : "A decree can be reassigned only when every effective image task is unstarted and has the same designer");
+    }
+    if (dto.mode === "REASSIGN" && !dto.reason?.trim()) throw new BadRequestException("A reason is required when adjusting a decree assignment");
     const imageTasks = tasks.flatMap((task) => task.imageTasks.filter((item) => dto.mode === "ASSIGN"
       ? item.status === "PENDING_ASSIGNMENT" && !item.designerId
       : item.status === "NOT_STARTED" && !!item.designerId));
     if (!imageTasks.length) throw new BadRequestException("所选法旨没有可处理的图片任务");
-    await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.weekStart);
+    await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.weekStart, dto.reason?.trim());
     await this.log.log({ userId, action: "batch_assign_designer", targetType: "task", targetId: 0, content: `批量${dto.mode === "ASSIGN" ? "分配" : "改派"}设计师：${taskIds.length} 条法旨`, afterValue: { taskIds, designerId: dto.designerId, mode: dto.mode } });
     return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
   }
@@ -276,6 +297,10 @@ export class ImageTasksService {
       include: { task: true, attachments: { where: { deletedAt: null }, select: { category: true } } },
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
+
+    if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId && (userRole === "DESIGN_MANAGER" || ADMIN_ROLES.includes(userRole))) {
+      throw new BadRequestException("Designer assignment must use the whole-decree assignment endpoint");
+    }
 
     if (userRole === "DESIGNER") {
       if (imageTask.designerId !== userId) throw new ForbiddenException("Only the assigned designer can update this image task");

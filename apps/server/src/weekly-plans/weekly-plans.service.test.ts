@@ -1,4 +1,5 @@
 import { WeeklyPlansService } from "./weekly-plans.service";
+import { getShanghaiWeekRange } from "../common/shanghai-time";
 
 describe("WeeklyPlansService", () => {
   let service: WeeklyPlansService;
@@ -136,20 +137,80 @@ describe("WeeklyPlansService", () => {
     expect(result).toEqual(expect.objectContaining({ id: 1, status: "ACTIVE" }));
     expect(prisma.weeklyPlanItem.update).toHaveBeenCalledWith({ where: { id: 101 }, data: expect.objectContaining({ designerId: 7, reassignedAt: expect.any(Date) }) });
     expect(prisma.weeklyPlanItem.create).not.toHaveBeenCalled();
+    expect(prisma.weeklyPlan.update).not.toHaveBeenCalled();
   });
 
-  it("creates a current-week DRAFT plan and adds assigned tasks when no plan exists", async () => {
+  it("restores a cancelled item when a decree is moved back to a prior week", async () => {
+    prisma.weeklyPlan.findUnique.mockResolvedValue(draftPlan({ status: "ACTIVE" }));
+    prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
+    prisma.weeklyPlanItem.findUnique.mockResolvedValue({ id: 101, imageTaskId: 10, designerId: 5, status: "CANCELLED" });
+
+    await service.addAssignedTasksInTransaction(prisma, [imageTask({ designerId: 5 })], 7, 9, new Date(), "REASSIGN", undefined, "Move decree back to current week");
+
+    expect(prisma.weeklyPlanItem.update).toHaveBeenCalledWith({
+      where: { id: 101 },
+      data: expect.objectContaining({
+        designerId: 7,
+        status: "PLANNED",
+        cancelledAt: null,
+        cancelledById: null,
+        cancelReason: null,
+        reassignedAt: expect.any(Date),
+      }),
+    });
+    expect(prisma.weeklyPlanItem.create).not.toHaveBeenCalled();
+  });
+
+  it("activates a current-week DRAFT plan in the same transaction as the first formal assignment", async () => {
     prisma.weeklyPlan.findUnique.mockResolvedValue(null);
     prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
     prisma.weeklyPlanItem.findUnique.mockResolvedValue(null);
     const result = await service.addAssignedTasksInTransaction(prisma, [imageTask()], 7, 9, new Date(), "INITIAL");
-    expect(result).toEqual(expect.objectContaining({ id: 1, status: "DRAFT" }));
+    expect(result).toEqual(expect.objectContaining({ id: 1, status: "ACTIVE", activatedById: 9 }));
     expect(prisma.weeklyPlan.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ status: "DRAFT", createdById: 9 }),
     });
     expect(prisma.weeklyPlanItem.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ imageTaskId: 10, designerId: 7, source: "INITIAL_PLAN" }),
     });
+    expect(prisma.weeklyPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 1 },
+      data: expect.objectContaining({ status: "ACTIVE", activatedById: 9, activatedAt: expect.any(Date) }),
+    }));
+  });
+
+  it("keeps a next-week plan in DRAFT when tasks are assigned in advance", async () => {
+    const current = new Date();
+    const currentMonday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" })
+      .format(getShanghaiWeekRange(current).start);
+    const nextMonday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" })
+      .format(new Date(`${currentMonday}T00:00:00+08:00`).getTime() + 7 * 24 * 60 * 60 * 1000);
+    prisma.weeklyPlan.findUnique.mockResolvedValue(draftPlan());
+    prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
+    prisma.weeklyPlanItem.findUnique.mockResolvedValue(null);
+
+    await service.addAssignedTasksInTransaction(prisma, [imageTask()], 7, 9, current, "INITIAL", nextMonday);
+
+    expect(prisma.weeklyPlan.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects assignment into a week beyond the next Shanghai week", async () => {
+    const current = getShanghaiWeekRange();
+    const farFutureWeek = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" })
+      .format(new Date(current.start.getTime() + 14 * 24 * 60 * 60 * 1000));
+
+    await expect(service.addAssignedTasksInTransaction(prisma, [imageTask()], 7, 9, new Date(), "INITIAL", farFutureWeek))
+      .rejects.toThrow("current or next Shanghai week");
+    expect(prisma.weeklyPlan.create).not.toHaveBeenCalled();
+  });
+
+  it("propagates an activation failure so the enclosing assignment transaction can roll back", async () => {
+    prisma.weeklyPlan.findUnique.mockResolvedValue(draftPlan());
+    prisma.weeklyPlanItem.findFirst.mockResolvedValue(null);
+    prisma.weeklyPlanItem.findUnique.mockResolvedValue(null);
+    prisma.weeklyPlan.update.mockRejectedValue(new Error("activation failed"));
+
+    await expect(service.addAssignedTasksInTransaction(prisma, [imageTask()], 7, 9, new Date(), "INITIAL")).rejects.toThrow("activation failed");
   });
 
   it("marks only an ACTIVE planned item as completed after final review", async () => {

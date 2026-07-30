@@ -109,7 +109,7 @@ describe("WeeklyOperationsApprovalPlansService", () => {
 
     const result = await service.moveDecreeItem(51, nextWeekStart(), "延后至下周", 9, "OPERATION_MANAGER");
 
-    expect(result.toWeekStart).toEqual(getShanghaiWeekRange(new Date(sourceRange.start.getTime() + 7 * 86400000)).start);
+    expect(result.toWeekStart).toEqual(formatWeekStart(getShanghaiWeekRange(new Date(sourceRange.start.getTime() + 7 * 86400000))));
     expect(prisma.weeklyOperationsApprovalPlanItem.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 51, removedAt: null } }));
     expect(prisma.weeklyOperationsApprovalPlanItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ decreeId: 11, plannedImageCountSnapshot: 3 }) });
     expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "weekly_operations_approval_plan_item_moved" }) }));

@@ -348,14 +348,15 @@ model WeeklyPlanItem {
   @@map("weekly_plan_items")
 }
 
-// Per-designer weekly completion targets. Assignment and completion metrics are
-// deliberately calculated from ImageTask data rather than stored here.
+// Legacy per-designer target storage. It is retained only for historical
+// compatibility; formal weekly planning is calculated from WeeklyPlanItem and
+// ImageTask and must not read or write targetImageCount.
 model WeeklyDesignerPlan {
   id               Int       @id @default(autoincrement())
   designerId       Int
   weekStart        DateTime
   weekEnd          DateTime
-  targetImageCount Int       @default(0)
+  targetImageCount Int       @default(0) // legacy / deprecated
   createdById      Int
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -370,6 +371,8 @@ model WeeklyDesignerPlan {
   @@map("weekly_designer_plans")
 }
 
+// Historical numeric target adjustments. New plan adjustments are audited as
+// decree-level WeeklyPlan audit events instead of creating these records.
 model WeeklyDesignerPlanAdjustment {
   id             Int       @id @default(autoincrement())
   planId         Int

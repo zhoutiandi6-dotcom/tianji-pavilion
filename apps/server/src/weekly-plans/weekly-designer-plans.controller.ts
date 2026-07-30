@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Post, Query, Request, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, Request, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { InitializeWeeklyDesignerPlansDto } from "./dto/initialize-weekly-designer-plans.dto";
-import { UpsertWeeklyDesignerPlanDto } from "./dto/upsert-weekly-designer-plan.dto";
+import { RemoveWeeklyDesignerPlanDecreeDto } from "./dto/remove-weekly-designer-plan-decree.dto";
 import { WeeklyDesignerPlanQueryDto } from "./dto/weekly-designer-plan-query.dto";
 import { WeeklyDesignerPlansService } from "./weekly-designer-plans.service";
 
@@ -20,14 +20,9 @@ export class WeeklyDesignerPlansController {
     return this.service.initializeWeek(dto.weekStart, req.user.sub, req.user.role);
   }
 
-  @Post()
-  upsert(@Body() dto: UpsertWeeklyDesignerPlanDto, @Request() req: any) {
-    return this.service.upsertTarget(dto, req.user.sub, req.user.role);
-  }
-
-  @Get("adjustments")
-  adjustments(@Query() query: WeeklyDesignerPlanQueryDto, @Request() req: any) {
-    return this.service.getAdjustments(req.user.sub, req.user.role, query.weekStart);
+  @Post("decrees/:taskId/remove")
+  removeDecree(@Param("taskId", ParseIntPipe) taskId: number, @Body() dto: RemoveWeeklyDesignerPlanDecreeDto, @Request() req: any) {
+    return this.service.removeDecreeFromPlan(taskId, dto.weekStart, dto.reason, req.user.sub, req.user.role);
   }
 
   @Get("unassigned")

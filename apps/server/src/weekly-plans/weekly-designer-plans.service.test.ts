@@ -1,20 +1,19 @@
 import { ForbiddenException } from "@nestjs/common";
-import { getShanghaiWeekRange } from "../common/shanghai-time";
+import { formatShanghaiDate, getShanghaiWeekRange } from "../common/shanghai-time";
 import { WeeklyDesignerPlansService } from "./weekly-designer-plans.service";
 
 describe("WeeklyDesignerPlansService", () => {
   let prisma: any;
   let service: WeeklyDesignerPlansService;
 
-  const designer = { id: 7, username: "designer", displayName: "设计师甲", isActive: true };
-  const currentWeek = () => getShanghaiWeekRange();
-  const currentWeekStart = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(currentWeek().start);
-  const nextWeekStart = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(
-    getShanghaiWeekRange(new Date(currentWeek().start.getTime() + 7 * 24 * 60 * 60 * 1000)).start,
-  );
-  const planItem = (overrides: Record<string, unknown> = {}) => ({
+  const designer = { id: 7, username: "designer-a", displayName: "设计师甲" };
+  const currentRange = () => getShanghaiWeekRange();
+  const currentWeekStart = () => formatShanghaiDate(currentRange().start);
+  const nextWeekStart = () => formatShanghaiDate(new Date(currentRange().start.getTime() + 7 * 24 * 60 * 60 * 1000));
+  const planItem = (overrides: Record<string, any> = {}) => ({
     id: 1,
-    designerId: 7,
+    imageTaskId: 10,
+    designerId: designer.id,
     status: "PLANNED",
     plannedAt: new Date(),
     designer,
@@ -22,8 +21,9 @@ describe("WeeklyDesignerPlansService", () => {
       id: 10,
       taskId: 3,
       imageTitle: "主图",
-      designerId: 7,
+      designerId: designer.id,
       status: "NOT_STARTED",
+      approvedAt: null,
       task: { id: 3, serialNumber: "TJ-3", productCode: "SKU-3", workflowStatus: "DESIGN_ASSIGNED", store: null, requirementType: null },
     },
     ...overrides,
@@ -31,88 +31,94 @@ describe("WeeklyDesignerPlansService", () => {
 
   beforeEach(() => {
     prisma = {
-      weeklyPlan: { findUnique: jest.fn(), upsert: jest.fn().mockImplementation(({ create }: any) => ({ id: 1, ...create })) },
-      weeklyPlanItem: { findMany: jest.fn() },
-      weeklyDesignerPlan: {
-        findMany: jest.fn(),
+      weeklyPlan: {
         findUnique: jest.fn(),
-        create: jest.fn().mockImplementation(({ data }: any) => ({ id: 31, ...data })),
-        update: jest.fn().mockImplementation(({ data }: any) => ({ id: 31, ...data })),
+        upsert: jest.fn().mockImplementation(({ create }: any) => ({ id: 1, ...create })),
       },
-      weeklyDesignerPlanAdjustment: { create: jest.fn().mockResolvedValue({ id: 1 }), findMany: jest.fn().mockResolvedValue([]) },
-      imageTask: { findMany: jest.fn() },
-      task: { findMany: jest.fn() },
+      weeklyPlanItem: { update: jest.fn().mockResolvedValue({ id: 1 }) },
+      weeklyDesignerPlan: { findMany: jest.fn() },
+      weeklyDesignerPlanAdjustment: { create: jest.fn() },
       auditEvent: { create: jest.fn().mockResolvedValue({ id: 1 }), findMany: jest.fn().mockResolvedValue([]) },
-      user: { findMany: jest.fn().mockResolvedValue([designer]), findFirst: jest.fn().mockResolvedValue(designer) },
+      user: { findMany: jest.fn().mockResolvedValue([designer]) },
+      task: { findMany: jest.fn().mockResolvedValue([]) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     service = new WeeklyDesignerPlansService(prisma);
   });
 
-  it("calculates assigned work from weekly task memberships and completion from final approvals", async () => {
-    const range = currentWeek();
-    prisma.weeklyDesignerPlan.findMany.mockResolvedValue([{ id: 31, designerId: 7, targetImageCount: 6, designer }]);
-    prisma.weeklyPlan.findUnique.mockResolvedValue({ id: 1, status: "ACTIVE", items: [planItem(), planItem({ id: 2, imageTask: { ...planItem().imageTask, id: 11, status: "SUBMITTED_FOR_REVIEW" } })] });
-    prisma.imageTask.findMany.mockResolvedValue([{ id: 10, designerId: 7 }, { id: 11, designerId: 7 }]);
+  it("aggregates designer planning solely from weekly plan items and image tasks", async () => {
+    const range = currentRange();
+    prisma.weeklyPlan.findUnique.mockResolvedValue({
+      id: 1,
+      status: "ACTIVE",
+      items: [
+        planItem({ imageTask: { ...planItem().imageTask, status: "APPROVED", approvedAt: new Date(range.start.getTime() + 60_000) } }),
+        planItem({ id: 2, imageTaskId: 11, imageTask: { ...planItem().imageTask, id: 11, status: "SUBMITTED_FOR_REVIEW" } }),
+      ],
+    });
 
     const result = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
 
-    expect(result.summary).toEqual(expect.objectContaining({ targetImageCount: 6, assignedCount: 2, completedCount: 2, remainingTargetCount: 4, completionRate: 33.3 }));
-    expect(result.designers[0]).toEqual(expect.objectContaining({ designerId: 7, targetImageCount: 6, assignedCount: 2, pendingReviewCount: 1 }));
-    expect(prisma.imageTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ approvedAt: { gte: range.start, lt: range.end } }) }));
+    expect(result.summary).toEqual(expect.objectContaining({ decreeCount: 1, plannedImageCount: 2, assignedCount: 2, completedCount: 1, pendingReviewCount: 1, remainingCount: 1, completionRate: 50 }));
+    expect(result.designers[0]).toEqual(expect.objectContaining({ designerId: 7, plannedImageCount: 2, completedCount: 1 }));
+    expect(prisma.weeklyDesignerPlan.findMany).not.toHaveBeenCalled();
   });
 
-  it("creates zero-target records for every active designer when initializing the current week", async () => {
-    prisma.weeklyDesignerPlan.findUnique.mockResolvedValue(null);
+  it("keeps a legacy target value out of formal plan statistics", async () => {
+    prisma.weeklyDesignerPlan.findMany.mockResolvedValue([{ designerId: 7, targetImageCount: 999 }]);
+    prisma.weeklyPlan.findUnique.mockResolvedValue({ id: 1, status: "ACTIVE", items: [planItem()] });
+
+    const result = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
+
+    expect(result.summary.plannedImageCount).toBe(1);
+    expect(result.summary).not.toHaveProperty("targetImageCount");
+    expect(prisma.weeklyDesignerPlan.findMany).not.toHaveBeenCalled();
+  });
+
+  it("initializes only a DRAFT weekly plan without creating legacy numeric targets", async () => {
     const result = await service.initializeWeek(currentWeekStart(), 9, "DESIGN_MANAGER");
 
-    expect(result).toEqual(expect.objectContaining({ createdCount: 1, designerCount: 1 }));
-    expect(prisma.weeklyDesignerPlan.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ designerId: 7, targetImageCount: 0, createdById: 9 }),
+    expect(result).toEqual(expect.objectContaining({ weekStart: currentWeekStart(), status: "DRAFT" }));
+    expect(prisma.weeklyPlan.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ status: "DRAFT", createdById: 9 }),
+    }));
+    expect(prisma.weeklyDesignerPlan.findMany).not.toHaveBeenCalled();
+    expect(prisma.weeklyDesignerPlanAdjustment.create).not.toHaveBeenCalled();
+  });
+
+  it("allows only current and next week configuration", async () => {
+    prisma.weeklyPlan.findUnique.mockResolvedValue(null);
+    const next = await service.getWeekOverview(9, "DESIGN_MANAGER", nextWeekStart());
+    const farFuture = formatShanghaiDate(new Date(currentRange().start.getTime() + 14 * 24 * 60 * 60 * 1000));
+    const later = await service.getWeekOverview(9, "DESIGN_MANAGER", farFuture);
+
+    expect(next.canConfigure).toBe(true);
+    expect(later.canConfigure).toBe(false);
+  });
+
+  it("keeps historical weeks read-only", async () => {
+    await expect(service.initializeWeek("2020-01-06", 9, "DESIGN_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("rejects removal once a decree has started or completed", async () => {
+    prisma.weeklyPlan.findUnique.mockResolvedValue({
+      id: 1,
+      items: [planItem({ imageTask: { status: "APPROVED", designerId: 7 } })],
     });
+
+    await expect(service.removeDecreeFromPlan(3, currentWeekStart(), "已开始制作", 9, "DESIGN_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.weeklyPlanItem.update).not.toHaveBeenCalled();
   });
 
-  it("creates a next-week target plan using the same unique target source", async () => {
-    prisma.weeklyDesignerPlan.findUnique.mockResolvedValue(null);
-    const result = await service.upsertTarget({ designerId: 7, weekStart: nextWeekStart(), targetImageCount: 12, reason: "周初计划" }, 9, "DESIGN_MANAGER");
+  it("shows only whole decrees whose effective image tasks are all pending assignment", async () => {
+    prisma.task.findMany.mockResolvedValue([
+      { id: 1, serialNumber: "TJ-1", store: null, requirementType: null, creator: designer, priority: "NORMAL", productCode: "SKU-1", taskType: null, imageTasks: [{ id: 1, status: "PENDING_ASSIGNMENT", designerId: null }, { id: 2, status: "PENDING_ASSIGNMENT", designerId: null }] },
+      { id: 2, serialNumber: "TJ-2", store: null, requirementType: null, creator: designer, priority: "NORMAL", productCode: "SKU-2", taskType: null, imageTasks: [{ id: 3, status: "PENDING_ASSIGNMENT", designerId: null }, { id: 4, status: "IN_PROGRESS", designerId: 7 }] },
+    ]);
 
-    expect(result).toEqual(expect.objectContaining({ created: true, adjusted: false }));
-    expect(prisma.weeklyDesignerPlan.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ designerId: 7, targetImageCount: 12, createdById: 9 }),
-    });
-  });
+    const result = await service.getUnassigned(9, "DESIGN_MANAGER");
 
-  it("records a durable adjustment when the current-week target changes", async () => {
-    prisma.weeklyDesignerPlan.findUnique.mockResolvedValue({ id: 31, designerId: 7, targetImageCount: 4 });
-    await service.upsertTarget({ designerId: 7, weekStart: currentWeekStart(), targetImageCount: 6, reason: "周中调整" }, 9, "DESIGN_MANAGER");
-
-    expect(prisma.weeklyDesignerPlan.update).toHaveBeenCalledWith({ where: { id: 31 }, data: { targetImageCount: 6 } });
-    expect(prisma.weeklyDesignerPlanAdjustment.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ planId: 31, previousTarget: 4, newTarget: 6, reason: "周中调整", adjustedById: 9 }),
-    });
-  });
-
-  it("keeps historical target plans read-only for design managers", async () => {
-    await expect(service.upsertTarget({ designerId: 7, weekStart: "2020-01-06", targetImageCount: 6, reason: "历史修改" }, 9, "DESIGN_MANAGER")).rejects.toBeInstanceOf(ForbiddenException);
-    expect(prisma.weeklyDesignerPlan.update).not.toHaveBeenCalled();
-  });
-
-  it("allows completion to exceed the target and returns null for a zero target", async () => {
-    prisma.weeklyDesignerPlan.findMany.mockResolvedValue([{ id: 31, designerId: 7, targetImageCount: 0, designer }]);
-    prisma.weeklyPlan.findUnique.mockResolvedValue({ id: 1, status: "ACTIVE", items: [planItem()] });
-    prisma.imageTask.findMany.mockResolvedValue([{ id: 10, designerId: 7 }]);
-
-    const zeroTarget = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
-    expect(zeroTarget.designers[0]).toEqual(expect.objectContaining({ targetImageCount: 0, completedCount: 1, completionRate: null, isOverTarget: false }));
-
-    prisma.weeklyDesignerPlan.findMany.mockResolvedValue([{ id: 31, designerId: 7, targetImageCount: 1, designer }]);
-    prisma.imageTask.findMany.mockResolvedValue([{ id: 10, designerId: 7 }, { id: 11, designerId: 7 }]);
-    const overTarget = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
-    expect(overTarget.designers[0]).toEqual(expect.objectContaining({ completionRate: 200, isOverTarget: true }));
-  });
-
-  it("does not let designers configure targets or access the unassigned manager queue", async () => {
-    await expect(service.upsertTarget({ designerId: 7, weekStart: currentWeekStart(), targetImageCount: 4, reason: "越权" }, 7, "DESIGNER")).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(service.getUnassigned(7, "DESIGNER")).rejects.toBeInstanceOf(ForbiddenException);
+    expect(result).toEqual(expect.objectContaining({ total: 1, imageCount: 2 }));
+    expect(result.items[0]?.id).toBe(1);
   });
 });

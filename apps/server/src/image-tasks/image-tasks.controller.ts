@@ -3,7 +3,6 @@ import { AuthGuard } from "@nestjs/passport";
 import { ImageTasksService } from "./image-tasks.service";
 import { CreateImageTaskDto } from "./dto/create-image-task.dto";
 import { UpdateImageTaskDto } from "./dto/update-image-task.dto";
-import { BatchAssignImageTasksDto } from "./dto/batch-assign-image-tasks.dto";
 import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
 
@@ -14,11 +13,6 @@ export class ImageTasksController {
 
   @Get("by-task/:taskId")
   async findByTask(@Param("taskId", ParseIntPipe) taskId: number, @Request() req: any) { return this.service.findByTask(taskId, req.user.sub, req.user.role); }
-
-  @Post("batch/assign")
-  async batchAssign(@Body() dto: BatchAssignImageTasksDto, @Request() req: any) {
-    return this.service.batchAssign(dto, req.user.sub, req.user.role);
-  }
 
   @Post("batch/assign-tasks")
   async batchAssignTasks(@Body() dto: BatchAssignTasksDto, @Request() req: any) {

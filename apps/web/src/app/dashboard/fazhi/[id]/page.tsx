@@ -521,8 +521,13 @@ export default function FazhiDetailPage() {
   };
 
   const batchAssignDesigner = async () => {
+    const assignableImageTasks = (task?.imageTasks || []).filter(isBatchAssignableImageTask);
     if (!checkedImageTaskIds.length) {
       message.warning("请选择待分配的图片任务");
+      return;
+    }
+    if (checkedImageTaskIds.length !== assignableImageTasks.length || !assignableImageTasks.every((item: any) => checkedImageTaskIds.includes(item.id))) {
+      message.warning("设计主管分配必须整单处理，请选择该法旨全部有效待分配图片");
       return;
     }
     if (!batchDesignerId) {
@@ -530,7 +535,7 @@ export default function FazhiDetailPage() {
       return;
     }
     try {
-      const res = await imageTaskApi.batchAssign({ imageTaskIds: checkedImageTaskIds, designerId: batchDesignerId });
+      const res = await imageTaskApi.batchAssignTasks({ taskIds: [task.id], designerId: batchDesignerId, mode: "ASSIGN" });
       const result = res.data.data || res.data;
       message.success(`批量分配完成：成功 ${result.successCount}，失败 ${result.failedCount}`);
       setCheckedImageTaskIds([]);

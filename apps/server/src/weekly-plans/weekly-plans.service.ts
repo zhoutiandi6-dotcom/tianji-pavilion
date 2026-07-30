@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
-import { getPreviousShanghaiWeekRange, getShanghaiWeekRange } from "../common/shanghai-time";
+import { formatShanghaiDate, getPreviousShanghaiWeekRange, getShanghaiWeekRange, getShanghaiWeekRangeForWeekStart } from "../common/shanghai-time";
 import {
   FINAL_IMAGE_TASK_STATUSES,
   WEEKLY_PLAN_DESIGNER_ROLE,
@@ -16,6 +16,10 @@ type AssignmentType = "INITIAL" | "REASSIGN";
 @Injectable()
 export class WeeklyPlansService {
   constructor(private prisma: PrismaService) {}
+
+  private serializePlan<T extends { weekStart: Date; weekEnd: Date }>(plan: T) {
+    return { ...plan, weekStart: formatShanghaiDate(plan.weekStart), weekEnd: formatShanghaiDate(plan.weekEnd) };
+  }
 
   private assertManager(role: string) {
     if (!WEEKLY_PLAN_MANAGER_ROLES.includes(role)) {
@@ -60,17 +64,13 @@ export class WeeklyPlansService {
   }
 
   private resolveAssignmentRange(weekStart: string | undefined, assignedAt: Date) {
-    if (!weekStart) return getShanghaiWeekRange(assignedAt);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
-      throw new BadRequestException("weekStart must use YYYY-MM-DD");
-    }
-    const anchor = new Date(`${weekStart}T12:00:00+08:00`);
-    if (Number.isNaN(anchor.getTime())) throw new BadRequestException("Invalid plan week");
-    const range = getShanghaiWeekRange(anchor);
-    const monday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(range.start);
-    if (monday !== weekStart) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai");
-    if (range.start.getTime() < getShanghaiWeekRange().start.getTime()) {
-      throw new ForbiddenException("Cannot assign a task into a historical week plan");
+    const current = getShanghaiWeekRange(assignedAt);
+    if (!weekStart) return current;
+    const range = getShanghaiWeekRangeForWeekStart(weekStart);
+    if (!range) throw new BadRequestException("weekStart must be a Monday in Asia/Shanghai and use YYYY-MM-DD");
+    const next = getShanghaiWeekRange(new Date(current.start.getTime() + 7 * 24 * 60 * 60 * 1000));
+    if (![current.start.getTime(), next.start.getTime()].includes(range.start.getTime())) {
+      throw new ForbiddenException("Decree assignments can be scheduled only for the current or next Shanghai week");
     }
     return range;
   }
@@ -84,6 +84,7 @@ export class WeeklyPlansService {
     assignedAt: Date,
     assignmentType: AssignmentType,
     weekStart?: string,
+    adjustmentReason?: string,
   ) {
     const range = this.resolveAssignmentRange(weekStart, assignedAt);
     let plan = await tx.weeklyPlan.findUnique({ where: { weekStart: range.start } });
@@ -96,14 +97,31 @@ export class WeeklyPlansService {
     this.assertMutable(plan);
     const source = this.sourceForPlan(plan);
 
+    const movedItems: Array<{ imageTaskId: number; previousDesignerId: number; previousWeekStart: string }> = [];
     for (const imageTask of imageTasks) {
-      const activeElsewhere = await tx.weeklyPlanItem.findFirst({
+      let activeElsewhere = await tx.weeklyPlanItem.findFirst({
         where: {
           imageTaskId: imageTask.id,
           status: { not: WEEKLY_PLAN_ITEM_STATUS.CANCELLED },
           weeklyPlan: { id: { not: plan.id }, status: { in: [WEEKLY_PLAN_STATUS.DRAFT, WEEKLY_PLAN_STATUS.ACTIVE] } },
         },
       });
+      if (activeElsewhere && assignmentType === "REASSIGN") {
+        if (activeElsewhere.status === WEEKLY_PLAN_ITEM_STATUS.COMPLETED) throw new ForbiddenException("Completed decree work cannot be moved to another weekly plan");
+        const previousPlan = await tx.weeklyPlan.findUnique({ where: { id: activeElsewhere.weeklyPlanId } });
+        if (!previousPlan) throw new NotFoundException("Source weekly plan not found");
+        await tx.weeklyPlanItem.update({
+          where: { id: activeElsewhere.id },
+          data: {
+            status: WEEKLY_PLAN_ITEM_STATUS.CANCELLED,
+            cancelledAt: assignedAt,
+            cancelledById: userId,
+            cancelReason: adjustmentReason || "Reassigned to another weekly plan",
+          },
+        });
+        movedItems.push({ imageTaskId: imageTask.id, previousDesignerId: activeElsewhere.designerId, previousWeekStart: formatShanghaiDate(previousPlan.weekStart) });
+        activeElsewhere = null;
+      }
       if (activeElsewhere) throw new ForbiddenException("同一图片任务不能同时纳入两个有效周计划");
 
       const existing = await tx.weeklyPlanItem.findUnique({
@@ -114,17 +132,75 @@ export class WeeklyPlansService {
           data: { weeklyPlanId: plan.id, imageTaskId: imageTask.id, designerId, source, status: WEEKLY_PLAN_ITEM_STATUS.PLANNED, plannedAt: assignedAt },
         });
         await this.recordAudit(tx, "weekly_plan_item_added", userId, plan.id, { weeklyPlanItemId: item.id, imageTaskId: imageTask.id, designerId, source });
+      } else if (assignmentType === "REASSIGN" && existing.status === WEEKLY_PLAN_ITEM_STATUS.CANCELLED) {
+        // A task can return to a prior week. Restore its unique historical row
+        // instead of creating a duplicate that SQLite's unique key would reject.
+        await tx.weeklyPlanItem.update({
+          where: { id: existing.id },
+          data: {
+            designerId,
+            source,
+            status: WEEKLY_PLAN_ITEM_STATUS.PLANNED,
+            reassignedAt: assignedAt,
+            cancelledAt: null,
+            cancelledById: null,
+            cancelReason: null,
+          },
+        });
+        await this.recordAudit(tx, "weekly_plan_item_restored_for_reassignment", userId, plan.id, {
+          weeklyPlanItemId: existing.id,
+          imageTaskId: imageTask.id,
+          designerId,
+          reason: adjustmentReason || null,
+        });
       } else if (assignmentType === "REASSIGN" && existing.designerId !== designerId) {
         await tx.weeklyPlanItem.update({ where: { id: existing.id }, data: { designerId, reassignedAt: assignedAt } });
         await this.recordAudit(tx, "weekly_plan_item_reassigned", userId, plan.id, { weeklyPlanItemId: existing.id, imageTaskId: imageTask.id, designerId });
       }
     }
+    if (plan.status === WEEKLY_PLAN_STATUS.DRAFT && range.start.getTime() === getShanghaiWeekRange(assignedAt).start.getTime()) {
+      plan = await tx.weeklyPlan.update({
+        where: { id: plan.id },
+        data: { status: WEEKLY_PLAN_STATUS.ACTIVE, activatedAt: assignedAt, activatedById: userId },
+      });
+      await this.recordAudit(tx, "weekly_plan_activated", userId, plan.id, {
+        weeklyPlanId: plan.id,
+        activatedAt: assignedAt.toISOString(),
+        activationReason: "first_formal_assignment",
+      });
+      const approvedItems = await tx.weeklyPlanItem.findMany({
+        where: {
+          weeklyPlanId: plan.id,
+          status: WEEKLY_PLAN_ITEM_STATUS.PLANNED,
+          imageTask: { status: { in: FINAL_IMAGE_TASK_STATUSES }, approvedAt: { not: null } },
+        },
+        include: { imageTask: { select: { approvedAt: true } } },
+      }) || [];
+      for (const item of approvedItems) {
+        await tx.weeklyPlanItem.update({
+          where: { id: item.id },
+          data: { status: WEEKLY_PLAN_ITEM_STATUS.COMPLETED, completedAt: item.imageTask.approvedAt },
+        });
+        await this.recordAudit(tx, "weekly_plan_item_completed", userId, plan.id, {
+          weeklyPlanId: plan.id,
+          weeklyPlanItemId: item.id,
+          imageTaskId: item.imageTaskId,
+          completedAt: item.imageTask.approvedAt!.toISOString(),
+          completionSource: "activation_reconciliation",
+        });
+      }
+    }
+
     await this.recordAudit(tx, assignmentType === "INITIAL" ? "weekly_plan_decree_assigned" : "weekly_plan_decree_reassigned", userId, plan.id, {
       weeklyPlanId: plan.id,
       imageTaskIds: imageTasks.map((item) => item.id),
       imageCount: imageTasks.length,
+      taskIds: [...new Set(imageTasks.map((item: any) => item.taskId).filter(Boolean))],
+      previousDesignerIds: [...new Set(movedItems.map((item) => item.previousDesignerId))],
       designerId,
-      weekStart: range.start.toISOString(),
+      weekStart: formatShanghaiDate(range.start),
+      previousWeekStarts: [...new Set(movedItems.map((item) => item.previousWeekStart))],
+      reason: adjustmentReason || null,
       source,
     });
     return plan;
@@ -188,21 +264,21 @@ export class WeeklyPlansService {
     this.assertReadable(role);
     const range = getShanghaiWeekRange();
     const plan = await this.prisma.weeklyPlan.findUnique({ where: { weekStart: range.start } });
-    if (!plan) return { plan: null, weekStart: range.start, weekEnd: range.end };
+    if (!plan) return { plan: null, weekStart: formatShanghaiDate(range.start), weekEnd: formatShanghaiDate(range.end) };
     if (role === WEEKLY_PLAN_DESIGNER_ROLE) {
       return {
-        plan,
+        plan: this.serializePlan(plan),
         mine: await this.getDesignerSummary(plan.id, userId),
       };
     }
-    return { plan };
+    return { plan: this.serializePlan(plan) };
   }
 
   async createCurrent(userId: number, role: string) {
     this.assertManager(role);
     const range = getShanghaiWeekRange();
     const existing = await this.prisma.weeklyPlan.findUnique({ where: { weekStart: range.start } });
-    if (existing) return { plan: existing, created: false };
+    if (existing) return { plan: this.serializePlan(existing), created: false };
     try {
       const plan = await this.prisma.$transaction(async (tx: any) => {
         const created = await tx.weeklyPlan.create({
@@ -215,11 +291,11 @@ export class WeeklyPlansService {
         });
         return created;
       });
-      return { plan, created: true };
+      return { plan: this.serializePlan(plan), created: true };
     } catch (error: any) {
       if (error?.code === "P2002") {
         const plan = await this.prisma.weeklyPlan.findUniqueOrThrow({ where: { weekStart: range.start } });
-        return { plan, created: false };
+        return { plan: this.serializePlan(plan), created: false };
       }
       throw error;
     }
@@ -233,9 +309,9 @@ export class WeeklyPlansService {
       if (plan.weekStart.getTime() !== current.start.getTime()) {
         throw new ForbiddenException("设计师只能查看当前周计划");
       }
-      return { plan, mine: await this.getDesignerSummary(id, userId) };
+      return { plan: this.serializePlan(plan), mine: await this.getDesignerSummary(id, userId) };
     }
-    return { plan };
+    return { plan: this.serializePlan(plan) };
   }
 
   async addItem(planId: number, imageTaskId: number, userId: number, role: string) {
@@ -286,7 +362,7 @@ export class WeeklyPlansService {
         data: { status: WEEKLY_PLAN_STATUS.ACTIVE, activatedAt, activatedById: userId },
       });
       await this.recordAudit(tx, "weekly_plan_activated", userId, planId, { weeklyPlanId: planId, activatedAt: activatedAt.toISOString(), allowEmpty });
-      return updated;
+      return this.serializePlan(updated);
     });
   }
 
@@ -303,7 +379,7 @@ export class WeeklyPlansService {
         data: { status: WEEKLY_PLAN_STATUS.CLOSED, closedAt, closedById: userId },
       });
       await this.recordAudit(tx, "weekly_plan_closed", userId, planId, { weeklyPlanId: planId, closedAt: closedAt.toISOString() });
-      return updated;
+      return this.serializePlan(updated);
     });
   }
 
@@ -371,7 +447,7 @@ export class WeeklyPlansService {
         candidates.push({ imageTaskId: item.imageTaskId, previousItemId: item.id, designerId: item.imageTask.designerId, imageTitle: item.imageTask.imageTitle });
       }
     }
-    return { previousPlan: { id: previousPlan.id, weekStart: previousPlan.weekStart, weekEnd: previousPlan.weekEnd }, candidates, excluded };
+    return { previousPlan: { id: previousPlan.id, weekStart: formatShanghaiDate(previousPlan.weekStart), weekEnd: formatShanghaiDate(previousPlan.weekEnd) }, candidates, excluded };
   }
 
   async carryOver(planId: number, imageTaskIds: number[], userId: number, role: string) {

@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsDateString, IsIn, IsInt, IsOptional, Min } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsDateString, IsIn, IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
 
 export class BatchAssignTasksDto {
   @IsArray()
@@ -18,4 +18,9 @@ export class BatchAssignTasksDto {
   @IsOptional()
   @IsDateString()
   weekStart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  reason?: string;
 }

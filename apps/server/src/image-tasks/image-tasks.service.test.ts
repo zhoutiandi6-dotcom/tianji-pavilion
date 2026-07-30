@@ -46,57 +46,20 @@ describe("ImageTasksService stage A audit writes", () => {
     service = new ImageTasksService(prisma, log, eventBus, workflowEngine, weeklyPlans, operationsApprovalPlans);
   });
 
-  it("writes assignedAt and assignedById for a single initial assignment", async () => {
+  it("rejects a per-image assignment so a decree cannot be split between designers", async () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask());
 
-    const result = await service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER");
-
-    expect(prisma.imageTask.update).toHaveBeenCalledWith({
-      where: { id: 1 },
-      data: expect.objectContaining({
-        designerId: 7,
-        assignedAt: expect.any(Date),
-        assignedById: 9,
-        status: "NOT_STARTED",
-      }),
-    });
-    const metadata = JSON.parse(prisma.auditEvent.create.mock.calls[0][0].data.metadata);
-    expect(metadata).toEqual(expect.objectContaining({
-      imageTaskId: 1,
-      previousDesignerId: null,
-      newDesignerId: 7,
-      assignedById: 9,
-      assignmentType: "INITIAL",
-    }));
-    expect(result).toEqual(expect.objectContaining({ designerId: 7, status: "NOT_STARTED" }));
-    expect(weeklyPlans.addAssignedTasksInTransaction).toHaveBeenCalledWith(
-      prisma,
-      [expect.objectContaining({ id: 1 })],
-      7,
-      9,
-      expect.any(Date),
-      "INITIAL",
-      undefined,
-    );
+    await expect(service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER")).rejects.toThrow("whole-decree assignment");
+    expect(prisma.imageTask.update).not.toHaveBeenCalled();
+    expect(weeklyPlans.addAssignedTasksInTransaction).not.toHaveBeenCalled();
   });
 
-  it("writes assignment audit fields for every task in a batch", async () => {
-    prisma.imageTask.findMany.mockResolvedValue([
-      imageTask({ id: 1 }),
-      imageTask({ id: 2, imageIndex: 2 }),
-    ]);
+  it("assigns every effective image task of a decree in the same transaction", async () => {
+    prisma.task.findMany.mockResolvedValue([{ id: 10, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 1 }), imageTask({ id: 2, imageIndex: 2 })] }]);
 
-    await service.batchAssign({ imageTaskIds: [1, 2], designerId: 7 } as any, 9, "DESIGN_MANAGER");
+    await service.batchAssignTasks({ taskIds: [10], designerId: 7, mode: "ASSIGN" }, 9, "DESIGN_MANAGER");
 
     expect(prisma.imageTask.update).toHaveBeenCalledTimes(2);
-    for (const call of prisma.imageTask.update.mock.calls) {
-      expect(call[0].data).toEqual(expect.objectContaining({
-        designerId: 7,
-        assignedAt: expect.any(Date),
-        assignedById: 9,
-      }));
-    }
-    expect(prisma.auditEvent.create).toHaveBeenCalledTimes(2);
     expect(weeklyPlans.addAssignedTasksInTransaction).toHaveBeenCalledWith(
       prisma,
       expect.arrayContaining([expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 })]),
@@ -105,28 +68,9 @@ describe("ImageTasksService stage A audit writes", () => {
       expect.any(Date),
       "INITIAL",
       undefined,
+      undefined,
     );
-  });
-
-  it("records the previous designer and refreshes assignment fields on reassignment", async () => {
-    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
-      designerId: 5,
-      status: "NOT_STARTED",
-      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_ASSIGNED" },
-    }));
-
-    await service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER");
-
-    const metadata = JSON.parse(prisma.auditEvent.create.mock.calls[0][0].data.metadata);
-    expect(metadata).toEqual(expect.objectContaining({
-      previousDesignerId: 5,
-      newDesignerId: 7,
-      assignmentType: "REASSIGN",
-    }));
-    expect(prisma.imageTask.update.mock.calls[0][0].data).toEqual(expect.objectContaining({
-      assignedAt: expect.any(Date),
-      assignedById: 9,
-    }));
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
   });
 
   it("writes approvedAt and approvedById only on final approval", async () => {
@@ -209,7 +153,6 @@ describe("ImageTasksService stage A audit writes", () => {
       assignedById: null as number | null,
       status: "NOT_STARTED",
     };
-    prisma.imageTask.findUnique.mockResolvedValue(imageTask());
     prisma.imageTask.update.mockImplementation(async ({ data }: any) => {
       Object.assign(persisted, data);
       return { ...imageTask(), ...data };
@@ -225,7 +168,7 @@ describe("ImageTasksService stage A audit writes", () => {
       }
     });
 
-    await expect(service.update(1, { designerId: 7 } as any, 9, "DESIGN_MANAGER")).rejects.toThrow("audit failed");
+    await expect((service as any).assignImageTasks([imageTask()], 7, 9, "ASSIGN")).rejects.toThrow("audit failed");
     expect(persisted).toEqual({
       designerId: null,
       assignedAt: null,
@@ -238,6 +181,21 @@ describe("ImageTasksService stage A audit writes", () => {
   it("preserves role checks for assignment operations", async () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({ designerId: 5 }));
     await expect(service.update(1, { designerId: 7 } as any, 8, "DESIGNER")).rejects.toThrow();
+    expect(prisma.imageTask.update).not.toHaveBeenCalled();
+  });
+
+  it("flags historical mixed-designer decrees instead of silently overwriting them", async () => {
+    prisma.task.findMany.mockResolvedValue([{
+      id: 10,
+      workflowStatus: "DESIGN_ASSIGNED",
+      imageTasks: [
+        imageTask({ id: 1, designerId: 7, status: "NOT_STARTED" }),
+        imageTask({ id: 2, designerId: 8, status: "NOT_STARTED" }),
+      ],
+    }]);
+
+    await expect(service.batchAssignTasks({ taskIds: [10], designerId: 9, mode: "REASSIGN", reason: "Normalize owner" }, 3, "DESIGN_MANAGER"))
+      .rejects.toThrow("multiple designers");
     expect(prisma.imageTask.update).not.toHaveBeenCalled();
   });
 });
