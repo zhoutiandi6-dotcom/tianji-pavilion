@@ -42,6 +42,10 @@ function Get-TianjiDataConfiguration {
     DatabasePath = $databasePath
     DatabaseUrl = $databaseUrl
     AttachmentsPath = Join-Path $dataRoot "uploads\attachments"
+    BackupsPath = Join-Path $dataRoot "backups"
+    LogsPath = Join-Path $dataRoot "logs"
+    TempPath = Join-Path $dataRoot "temp"
+    QuarantinePath = Join-Path $dataRoot "quarantine"
     BackupRoot = Get-TianjiEnvValue -Root $Root -Name "TIANJI_BACKUP_ROOT"
   }
 }
@@ -64,6 +68,20 @@ function Test-TianjiBackupRoot {
     Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
     return [pscustomobject]@{ Available = $true; Writable = $false; Message = "Backup root is not writable in this PowerShell session: $backupRoot" }
   }
+}
+
+function Get-TianjiDirectoryStats {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{ Path = $Path; FileCount = 0; Bytes = 0 } }
+  $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue)
+  return [pscustomobject]@{ Path = $Path; FileCount = $files.Count; Bytes = ($files | Measure-Object -Property Length -Sum).Sum }
+}
+
+function Get-TianjiVolumeStatus {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $root = [System.IO.Path]::GetPathRoot((Resolve-Path -LiteralPath $Path).Path)
+  $drive = New-Object System.IO.DriveInfo($root)
+  return [pscustomobject]@{ Root = $root; TotalBytes = $drive.TotalSize; FreeBytes = $drive.AvailableFreeSpace; FreePercent = if ($drive.TotalSize -gt 0) { [math]::Round(($drive.AvailableFreeSpace / $drive.TotalSize) * 100, 2) } else { 0 } }
 }
 
 function Initialize-TianjiRuntime {

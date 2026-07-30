@@ -91,11 +91,35 @@ try {
   Write-Host "Tianji data root: $($dataConfig.DataRoot)"
   Write-Host "Tianji database: $($dataConfig.DatabasePath)"
   Write-Host "Tianji uploads: $($dataConfig.AttachmentsPath)"
+  $servicesAlreadyHealthy = (Test-TianjiEndpoint -Url "http://127.0.0.1:3000/login") -and (Test-TianjiEndpoint -Url "http://127.0.0.1:3001/api/health")
+  if (-not $servicesAlreadyHealthy) {
+    Write-Host "Checking daily local cold backup before startup..." -ForegroundColor Yellow
+    & (Join-Path $PSScriptRoot "backup-tianji.ps1") -Automatic -NoPause
+    if (-not $?) { throw "Daily Tianji cold backup failed. Startup was stopped to protect the active data set." }
+  } else {
+    Write-Host "Tianji is already healthy; daily cold backup is skipped." -ForegroundColor Green
+  }
   $backupRootStatus = Test-TianjiBackupRoot -DataConfiguration $dataConfig
   if ($backupRootStatus.Writable) {
     Write-Host $backupRootStatus.Message -ForegroundColor Green
   } else {
     Write-Host "Warning: $($backupRootStatus.Message) Local Tianji services will continue without Z-drive backup sync." -ForegroundColor Yellow
+  }
+  $dataVolume = Get-TianjiVolumeStatus -Path $dataConfig.DataRoot
+  Write-Host "Data volume $($dataVolume.Root): $([math]::Round($dataVolume.FreeBytes / 1GB, 2)) GB free ($($dataVolume.FreePercent)%)."
+  if ($dataVolume.FreeBytes -lt 20GB -or $dataVolume.FreePercent -lt 10) { Write-Warning "Tianji data volume is low. No business files were removed." }
+  if (-not $servicesAlreadyHealthy -and $backupRootStatus.Writable) {
+    $todayPrefix = (Get-Date).ToString("yyyyMMdd") + "-"
+    $latestBatch = Get-ChildItem -LiteralPath (Join-Path $dataConfig.BackupsPath "batches") -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name.StartsWith($todayPrefix) } | Sort-Object Name -Descending | Select-Object -First 1
+    if ($latestBatch) {
+      try {
+        & (Join-Path $PSScriptRoot "sync-tianji-backup.ps1") -BackupBatchPath $latestBatch.FullName -NoPause
+        if (-not $?) { throw "sync script failed" }
+      } catch {
+        Write-Warning "Tianji local backup is valid, but Z-drive sync was skipped or failed: $($_.Exception.Message)"
+      }
+    }
   }
   $network = Select-TianjiLanAddress
   if ($network.Candidates.Count -gt 1) {

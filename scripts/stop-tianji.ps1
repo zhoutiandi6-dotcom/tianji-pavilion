@@ -13,7 +13,7 @@ try {
   $state = Read-TianjiState
   if (-not $state) {
     Write-Host "No Tianji runtime state was found. No process was stopped."
-    exit 0
+    return
   }
 
   foreach ($entry in @(@("watchdog", $state.watchdog), @("frontend", $state.frontend), @("backend", $state.backend))) {
