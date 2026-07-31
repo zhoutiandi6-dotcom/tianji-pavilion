@@ -35,6 +35,14 @@ const statusColors: Record<string, string> = {
   COMPLETED: "success",
 };
 
+const designerImageStatusOptions = [
+  { value: "NOT_STARTED", label: "待开始" },
+  { value: "IN_PROGRESS", label: "设计中" },
+  { value: "REVISION_REQUIRED", label: "退回修改" },
+  { value: "SUBMITTED_FOR_REVIEW", label: "待审核" },
+  { value: "APPROVED", label: "已完成" },
+];
+
 const DESIGN_VISIBLE = ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW", "DESIGN_APPROVED", "COMPLETED"];
 const ARCHIVE_STATUSES = ["DESIGN_APPROVED", "COMPLETED", "CANCELLED"];
 const SUPERVISOR_SCOPES = ["ops-approvals", "approval-history", "design-flow-history", "design-assignment", "design-reviews", "design-tasks"];
@@ -89,6 +97,7 @@ export default function FazhiListPage() {
     if (next.search) params.set("search", next.search);
     if (next.priority) params.set("priority", next.priority);
     if (next.imageStatus) params.set("imageStatus", next.imageStatus);
+    if (next.taskStatus) params.set("taskStatus", next.taskStatus);
     if (next.imageGroup) params.set("imageGroup", next.imageGroup);
     if (next.statusGroup) params.set("statusGroup", next.statusGroup);
     if (next.approvalAction) params.set("approvalAction", next.approvalAction);
@@ -103,6 +112,7 @@ export default function FazhiListPage() {
   };
 
   const applyFilters = (next: any, shouldLoad = true) => {
+    if (next.imageStatus) next = { ...next, taskStatus: next.imageStatus };
     setFilters(next);
     syncUrl(next);
     if (shouldLoad) loadData(next);
@@ -111,9 +121,11 @@ export default function FazhiListPage() {
   const loadData = async (next = filters) => {
     setLoading(true);
     try {
+      const requestFilters = { ...next };
+      delete requestFilters.taskStatus;
       const res = next.scope === "ops-approvals"
-        ? await taskApi.findOpsApprovalQueue(next)
-        : await taskApi.findAll(next);
+        ? await taskApi.findOpsApprovalQueue(requestFilters)
+        : await taskApi.findAll(requestFilters);
       setData(res.data.data || res.data);
       setSelectedIds([]);
     } catch (err) {
@@ -145,7 +157,8 @@ export default function FazhiListPage() {
       status: normalizeStatus(params.get("status")),
       search: params.get("search") || undefined,
       priority: params.get("priority") || undefined,
-      imageStatus: params.get("imageStatus") || undefined,
+      imageStatus: params.get("taskStatus") || params.get("imageStatus") || undefined,
+      taskStatus: params.get("taskStatus") || undefined,
       imageGroup: params.get("imageGroup") || undefined,
       statusGroup: params.get("statusGroup") || undefined,
       approvalAction: params.get("approvalAction") || undefined,
@@ -368,7 +381,7 @@ export default function FazhiListPage() {
   return (
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
-        <Title level={4} style={{ margin: 0 }}>{filters.scope === "design-assignment" ? "待分配" : filters.scope === "design-reviews" ? "待审核" : filters.scope === "design-tasks" ? "设计任务" : "法旨中心"}</Title>
+        <Title level={4} style={{ margin: 0 }}>{role === "DESIGNER" ? "我的设计任务" : filters.scope === "design-assignment" ? "待分配" : filters.scope === "design-reviews" ? "待审核" : filters.scope === "design-tasks" ? "设计任务" : "法旨中心"}</Title>
         <Space wrap>
           {canExport && <Button icon={<DownloadOutlined />} onClick={exportCsv}>导出当前筛选</Button>}
           {canCreateTask && <Button type="primary" icon={<PlusOutlined />} onClick={() => router.push("/dashboard/fazhi/new")}>新建法旨</Button>}
@@ -397,9 +410,20 @@ export default function FazhiListPage() {
               onChange={(e) => setFilter({ search: e.target.value })} onPressEnter={search} />
           </Col>
           <Col xs={12} md={5}>
-            <Select allowClear placeholder="状态" style={{ width: "100%" }} value={filters.status}
-              onChange={(v) => applyFilters({ ...filters, status: normalizeStatus(v || null), page: 1 })}
-              options={statusOptions} />
+            {role === "DESIGNER" ? (
+              <Select
+                allowClear
+                placeholder="图片任务状态"
+                style={{ width: "100%" }}
+                value={filters.imageStatus}
+                onChange={(value) => applyFilters({ ...filters, imageStatus: value || undefined, taskStatus: value || undefined, page: 1 })}
+                options={designerImageStatusOptions}
+              />
+            ) : (
+              <Select allowClear placeholder="状态" style={{ width: "100%" }} value={filters.status}
+                onChange={(v) => applyFilters({ ...filters, status: normalizeStatus(v || null), page: 1 })}
+                options={statusOptions} />
+            )}
           </Col>
           <Col xs={12} md={5}>
             <Select allowClear placeholder="优先级" style={{ width: "100%" }} value={filters.priority}

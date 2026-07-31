@@ -113,6 +113,7 @@ export const imageTaskApi = {
   findByTask: (taskId: number) => api.get("/image-tasks/by-task/" + taskId),
   create: (data: { taskId: number; imageTitle: string; imageType?: string; requirementType?: string; requirement?: string; designerId?: number }) => api.post("/image-tasks", data),
   update: (id: number, data: any) => api.patch("/image-tasks/" + id, data),
+  start: (id: number) => api.post("/image-tasks/" + id + "/start"),
   submitReview: (id: number) => api.post("/image-tasks/" + id + "/submit-review"),
   approveReview: (id: number, remark?: string) => api.post("/image-tasks/" + id + "/approve-review", { remark }),
   rejectReview: (id: number, remark?: string) => api.post("/image-tasks/" + id + "/reject-review", { remark }),

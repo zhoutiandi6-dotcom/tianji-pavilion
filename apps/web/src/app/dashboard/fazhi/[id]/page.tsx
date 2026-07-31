@@ -277,6 +277,10 @@ export default function FazhiDetailPage() {
 
   const goBack = () => {
     const leave = () => {
+      if (isDesigner) {
+        router.push("/dashboard/fazhi?scope=processing");
+        return;
+      }
       if (typeof window !== "undefined" && window.history.length > 1) router.back();
       else router.push("/dashboard/fazhi");
     };

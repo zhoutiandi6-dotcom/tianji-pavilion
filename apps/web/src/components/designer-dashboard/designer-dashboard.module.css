@@ -1,0 +1,524 @@
+.root {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0 24px;
+  color: #151515;
+}
+.header {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.header h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+.header p {
+  margin: 7px 0 0;
+  color: #333;
+  font-size: 14px;
+}
+.header > div > span {
+  display: block;
+  margin-top: 4px;
+  color: #777;
+  font-size: 12px;
+}
+.headerTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.headerTools :global(.ant-input-search) {
+  width: 270px;
+}
+.headerTools :global(.ant-input),
+.headerTools :global(.ant-btn) {
+  height: 34px;
+  font-size: 13px;
+}
+.errorNotice {
+  margin-top: 16px;
+  padding: 11px 14px;
+  border: 1px solid #dedede;
+  border-left: 3px solid #111;
+  background: #fafafa;
+  color: #555;
+  font-size: 13px;
+}
+.topGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.darkCard,
+.weekCard,
+.statusSection,
+.priorityCard,
+.activityCard {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #e2e2df;
+  border-radius: 9px;
+  background: #fff;
+}
+.darkCard {
+  min-height: 220px;
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: minmax(190px, 28%) minmax(0, 1fr);
+  gap: 24px;
+  border-color: #080808;
+  color: #fff;
+  background: #080808;
+}
+.darkPrimary {
+  min-width: 0;
+  padding-right: 24px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #484848;
+}
+.darkPrimary h2,
+.cardTitle h2,
+.sectionHeading h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+.darkNumber {
+  margin-top: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 54px;
+  font-weight: 750;
+  line-height: 0.9;
+  letter-spacing: -2px;
+}
+.darkNumber small {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+.darkFooter {
+  margin-top: auto;
+  padding-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  border-top: 1px dashed #4a4a4a;
+  color: #c9c9c9;
+  font-size: 12px;
+}
+.darkFooter b {
+  margin-left: 5px;
+  color: #fff;
+  font-size: 14px;
+}
+.darkMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+}
+.darkMetrics button {
+  min-width: 0;
+  min-height: 66px;
+  padding: 0 clamp(10px, 1.2vw, 18px);
+  border: 0;
+  border-left: 1px solid #484848;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.darkMetrics button:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.darkMetrics button:hover {
+  color: #fff;
+  background: #171717;
+}
+.darkMetrics span {
+  display: block;
+  min-height: 32px;
+  color: #c7c7c7;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.darkMetrics b {
+  display: block;
+  margin-top: 6px;
+  font-size: 28px;
+  line-height: 1;
+}
+.weekCard {
+  min-height: 220px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+}
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cardTitle span,
+.sectionHeading > div > span,
+.dataHint {
+  color: #858582;
+  font-size: 12px;
+}
+.weekContent {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 0.9fr 1.35fr 1.1fr;
+  gap: 20px;
+  align-items: center;
+}
+.weekRate,
+.weekProgress {
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.weekRate {
+  padding-right: 20px;
+  border-right: 1px solid #e4e4e1;
+}
+.weekRate strong {
+  font-size: 52px;
+  line-height: 0.9;
+  letter-spacing: -2px;
+}
+.weekRate span,
+.weekProgress span {
+  margin-top: 8px;
+  color: #777;
+  font-size: 13px;
+}
+.weekProgress {
+  padding-right: 20px;
+  border-right: 1px solid #e4e4e1;
+}
+.weekProgress b {
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.weekProgress > div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #dedede;
+}
+.weekProgress i {
+  height: 100%;
+  display: block;
+  background: #111;
+}
+.weekDetails {
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 7px;
+  font-size: 12px;
+}
+.weekDetails > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #777;
+}
+.weekDetails b {
+  color: #111;
+  font-size: 13px;
+}
+.weekDetails :global(.ant-btn) {
+  width: fit-content;
+  min-height: 34px;
+  padding: 0 14px;
+  border-color: #111;
+  color: #fff;
+  background: #111;
+  font-size: 13px;
+}
+.noPlan {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 9px;
+}
+.noPlan strong {
+  font-size: 20px;
+}
+.noPlan span {
+  color: #777;
+  font-size: 13px;
+}
+.statusSection,
+.priorityCard,
+.activityCard {
+  margin-top: 16px;
+  padding: 20px 24px;
+}
+.sectionHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sectionHeading > button {
+  border: 0;
+  color: #444;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 15px;
+}
+.statusCard {
+  min-height: 106px;
+  padding: 16px 18px;
+  border: 1px solid #e5e5e2;
+  border-radius: 8px;
+  background: #fafaf9;
+  color: #151515;
+  text-align: left;
+  cursor: pointer;
+}
+.statusCard:hover {
+  border-color: #111;
+  background: #fff;
+}
+.statusCard span {
+  color: #555;
+  font-size: 13px;
+}
+.statusCard b {
+  display: block;
+  margin-top: 12px;
+  font-size: 30px;
+  line-height: 1;
+}
+.statusCard small {
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.priorityCard {
+  min-height: 300px;
+}
+.taskTable {
+  margin-top: 14px;
+}
+.taskHead,
+.taskRow {
+  display: grid;
+  grid-template-columns: 0.92fr 1.2fr 1.05fr 0.7fr 1.35fr 0.82fr 0.92fr;
+  gap: 10px;
+  align-items: center;
+}
+.taskHead {
+  min-height: 30px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ddd;
+  color: #777;
+  font-size: 12px;
+}
+.taskRow {
+  min-height: 46px;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+}
+.taskRow > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskRow em {
+  padding: 3px 7px;
+  border: 1px solid #d4d4d1;
+  border-radius: 4px;
+  color: #444;
+  font-size: 12px;
+  font-style: normal;
+}
+.taskRow em[data-status='REVISION_REQUIRED'] {
+  border-color: #222;
+  color: #111;
+  background: #f0f0ee;
+}
+.taskRow :global(.ant-btn) {
+  min-height: 30px;
+  font-size: 12px;
+}
+.activityCard {
+  min-height: 216px;
+}
+.activityList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+  margin-top: 10px;
+}
+.activityList button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 0;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 4px 12px;
+  border: 0;
+  border-bottom: 1px solid #eee;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.activityList button:hover strong {
+  text-decoration: underline;
+}
+.activityList time {
+  grid-row: span 2;
+  color: #777;
+  font-size: 12px;
+}
+.activityList strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activityList span {
+  overflow: hidden;
+  color: #777;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.empty {
+  min-height: 184px;
+  display: grid;
+  place-items: center;
+}
+.loading {
+  padding: 40px 24px;
+}
+@media (max-width: 1200px) {
+  .header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding-bottom: 4px;
+  }
+  .headerTools {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .darkCard {
+    grid-template-columns: minmax(172px, 28%) minmax(0, 1fr);
+    gap: 18px;
+  }
+  .darkPrimary {
+    padding-right: 18px;
+  }
+  .darkMetrics button {
+    padding: 0 10px;
+  }
+  .weekContent {
+    gap: 13px;
+  }
+  .weekRate,
+  .weekProgress {
+    padding-right: 13px;
+  }
+  .taskHead,
+  .taskRow {
+    grid-template-columns: 0.85fr 1.1fr 1fr 0.65fr 1.2fr 0.75fr 0.85fr;
+  }
+}
+@media (max-width: 900px) {
+  .topGrid {
+    grid-template-columns: 1fr;
+  }
+  .statusGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .activityList {
+    grid-template-columns: 1fr;
+  }
+  .headerTools {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 640px) {
+  .header h1 {
+    font-size: 24px;
+  }
+  .headerTools,
+  .headerTools :global(.ant-input-search) {
+    width: 100%;
+  }
+  .headerTools :global(.ant-btn) {
+    width: 100%;
+  }
+  .darkCard {
+    grid-template-columns: 1fr;
+  }
+  .darkPrimary {
+    min-height: 112px;
+    padding-right: 0;
+    border-right: 0;
+  }
+  .darkMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .darkMetrics button:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .weekContent {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .weekRate,
+  .weekProgress {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+  }
+  .weekDetails {
+    min-height: 0;
+  }
+  .statusGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .taskTable {
+    overflow-x: auto;
+  }
+  .taskHead,
+  .taskRow {
+    min-width: 820px;
+  }
+  .priorityCard,
+  .statusSection,
+  .activityCard {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+}

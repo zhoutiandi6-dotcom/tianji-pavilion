@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -23,10 +23,11 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import api, { dashboardApi } from "@/lib/api";
+import api, { dashboardApi, getErrorMessage } from "@/lib/api";
 import Loading from "@/components/Loading";
 import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
 import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
+import DesignerDashboard from "@/components/designer-dashboard/DesignerDashboard";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 import { displayUserName } from "@/lib/display";
 
@@ -102,19 +103,29 @@ export default function DashboardPage() {
   const [data, setData] = useState<any>({});
   const [user, setUser] = useState<any>(null);
   const [query, setQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [hasData, setHasData] = useState(false);
+  const hasLoadedRef = useRef(false);
 
-  const loadDashboard = useCallback((includeAnalytics = true) => {
-    setLoading(true);
-    Promise.all([api.get("/auth/me"), dashboardApi.getRoleDashboard(includeAnalytics)])
-      .then(([me, overview]) => {
-        setUser(me.data.data || me.data);
-        const next = overview.data.data || overview.data;
-        setData((previous: any) => includeAnalytics ? next : {
-          ...next,
-          roleData: { ...(previous?.roleData || {}), ...(next.roleData || {}) },
-        });
-      })
-      .finally(() => setLoading(false));
+  const loadDashboard = useCallback(async (includeAnalytics = true) => {
+    if (!hasLoadedRef.current) setLoading(true);
+    try {
+      const [me, overview] = await Promise.all([api.get("/auth/me"), dashboardApi.getRoleDashboard(includeAnalytics)]);
+      setUser(me.data.data || me.data);
+      const next = overview.data.data || overview.data;
+      setData((previous: any) =>
+        includeAnalytics
+          ? next
+          : { ...next, roleData: { ...(previous?.roleData || {}), ...(next.roleData || {}) } },
+      );
+      setHasData(true);
+      setError(null);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "驾驶舱数据暂时无法刷新"));
+    } finally {
+      hasLoadedRef.current = true;
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -124,7 +135,11 @@ export default function DashboardPage() {
 
   useDashboardRefresh({ refreshCore: () => loadDashboard(false), refreshAnalytics: () => loadDashboard(true) });
 
-  if (loading) return <Loading />;
+  if (loading && !hasData) return <Loading />;
+
+  if (user?.role === "DESIGNER") {
+    return <DesignerDashboard user={user} roleData={data.roleData} loading={loading} error={error} onRefresh={() => loadDashboard(true)} />;
+  }
 
   if (user?.role === "DESIGN_MANAGER") {
     return <DesignManagerDashboard data={data} user={user} roleData={data.roleData} />;
