@@ -1,12 +1,13 @@
 'use client';
 
-import { ClipboardEvent, useEffect, useState } from "react";
+import { ClipboardEvent, useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, Upload, message } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, MoreOutlined, RollbackOutlined, SaveOutlined, SendOutlined, StopOutlined, UploadOutlined } from "@ant-design/icons";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import ImageAnnotationViewer, { ImageAnnotation } from "@/components/ImageAnnotationViewer";
 import api, { attachmentApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayName, displayRequester, displayUserName } from "@/lib/display";
+import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 
 const { Title, Text } = Typography;
 
@@ -111,6 +112,7 @@ function getDefaultImageSourceType(row: any): ImageSourceType {
 
 export default function FazhiDetailPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const params = useParams();
   const id = Number(params.id);
   const [loading, setLoading] = useState(true);
@@ -139,10 +141,12 @@ export default function FazhiDetailPage() {
   const isDesignManager = role === "DESIGN_MANAGER";
   const isDesigner = role === "DESIGNER";
 
-  const loadTask = async () => {
-    setLoading(true);
+  const loadTask = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
-      const res = await taskApi.findOne(id);
+      const res = await api.get(`/tasks/${id}`, {
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
       const data = res.data.data || res.data;
       setTask(data);
       setMaterialLinks(data.materialLinks || "");
@@ -159,19 +163,21 @@ export default function FazhiDetailPage() {
     } catch (err) {
       console.error("[fazhi-detail] load failed", err);
       message.error(getErrorMessage(err, "加载失败，请稍后重试"));
-      router.push("/dashboard/fazhi");
+      if (showLoading) router.push("/dashboard/fazhi");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
-  };
+  }, [id, router]);
 
   useEffect(() => {
     api.get("/auth/me").then((res) => setCurrentUser(res.data.data || res.data)).catch(() => router.push("/login"));
     api.get("/stores").then((res) => setStores(res.data.data || res.data || [])).catch(() => {});
       userApi.findDesigners().then((res) => setUsers(res.data.data || res.data || [])).catch(() => {});
     api.get("/requirement-types").then((res) => setRequirementTypes(res.data.data || res.data || [])).catch(() => {});
-    loadTask();
-  }, [id]);
+    loadTask(true);
+  }, [id, loadTask]);
+
+  useDashboardRefresh({ refreshCore: loadTask });
 
   useEffect(() => () => {
     if (preview.url) window.URL.revokeObjectURL(preview.url);
@@ -279,6 +285,11 @@ export default function FazhiDetailPage() {
     const leave = () => {
       if (isDesigner) {
         router.push("/dashboard/fazhi?scope=processing");
+        return;
+      }
+      const returnTo = searchParams.get("returnTo");
+      if (isOperator && returnTo?.startsWith("/dashboard/fazhi")) {
+        router.push(returnTo);
         return;
       }
       if (typeof window !== "undefined" && window.history.length > 1) router.back();
@@ -735,6 +746,7 @@ export default function FazhiDetailPage() {
   const designReviewWorkbenchStage = !!canSelectedReview && !archivedStage;
   const showCompletedAssets = archivedStage || designerProductionStage || designReviewWorkbenchStage;
   const showCompletedUpload = showCompletedAssets && !archivedStage && canSelectedUploadCompleted && designerProductionStage;
+  const latestImageReviewRejection = selectedImageTask ? task?.imageReviewRejections?.[selectedImageTask.id] : null;
   const getPasteUploadCategory = (forcedCategory?: string) => {
     if (!selectedImageTask) return null;
     if (forcedCategory === "IMAGE_ORIGINAL") return draftWorkbenchStage ? forcedCategory : null;
@@ -778,8 +790,8 @@ export default function FazhiDetailPage() {
   return (
     <div style={{ maxWidth: 1280, margin: "0 auto" }}>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={goBack}>返回</Button>
-        <Title level={4} style={{ margin: 0 }}>法旨详情</Title>
+        <Button icon={<ArrowLeftOutlined />} onClick={goBack}>{isOperator ? "返回我的法旨" : "返回"}</Button>
+        <Title level={4} style={{ margin: 0 }}>{isOperator ? "我的法旨详情" : "法旨详情"}</Title>
         <Tag color="blue">{taskStatusLabels[task.workflowStatus] || task.workflowStatus}</Tag>
       </Space>
 
@@ -942,6 +954,13 @@ export default function FazhiDetailPage() {
                 <Text type="secondary">如有图片文案，也写在修改要求中。</Text>
                 {(designReviewWorkbenchStage || archivedStage) && selectedImageTask.reviewRemark && (
                   <Text>审核意见：{selectedImageTask.reviewRemark}</Text>
+                )}
+                {selectedImageTask.status === "REVISION_REQUIRED" && (
+                  <Space direction="vertical" size={2}>
+                    <Text>退回原因：{latestImageReviewRejection?.remark || selectedImageTask.reviewRemark || "-"}</Text>
+                    <Text type="secondary">退回人：{displayUserName(latestImageReviewRejection?.reviewer, "-")}</Text>
+                    <Text type="secondary">退回时间：{latestImageReviewRejection?.reviewedAt ? new Date(latestImageReviewRejection.reviewedAt).toLocaleString("zh-CN") : "-"}</Text>
+                  </Space>
                 )}
               </Space>
             </Card>

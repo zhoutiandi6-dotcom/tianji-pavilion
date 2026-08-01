@@ -79,6 +79,14 @@ export class TaskVisibilityService {
 
   scopeWhere(scope: string, role?: string, userId?: number) {
     const visible = this.visibleWhere(role, userId);
+    if (scope === "all") return visible;
+    if (role === "OPERATION") {
+      if (scope === "returned-for-supplement") return { AND: [visible, { workflowStatus: "OPS_REJECTED" }] };
+      if (scope === "pending-operations-approval") return { AND: [visible, { workflowStatus: "SUBMITTED" }] };
+      if (scope === "in-production") return { AND: [visible, { workflowStatus: { in: ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"] } }] };
+      if (scope === "design-completed") return { AND: [visible, { workflowStatus: { in: ["DESIGN_APPROVED", "COMPLETED"] } }] };
+      if (scope === "processing") return { AND: [visible, { workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"] } }] };
+    }
     if (scope === "ops-approvals") {
       if (role !== "OPERATION_MANAGER" && !this.isAdmin(role)) {
         throw new ForbiddenException("当前账号无权限访问该页面。");

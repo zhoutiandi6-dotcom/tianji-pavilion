@@ -1,0 +1,201 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Button, Card, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { attachmentApi, getErrorMessage, taskApi } from '@/lib/api';
+
+const viewOptions = [
+  ['all', '全部法旨'],
+  ['draft', '我的草稿'],
+  ['returnedForSupplement', '待我处理'],
+  ['processing', '处理中'],
+  ['designCompleted', '设计已完成'],
+] as const;
+
+const statusOptions = [
+  ['DRAFT', '草稿'],
+  ['SUBMITTED', '待主管审批'],
+  ['OPS_REJECTED', '退回补充'],
+  ['OPS_APPROVED', '待设计分配'],
+  ['DESIGN_ASSIGNED', '已分配'],
+  ['IN_DESIGN', '设计中'],
+  ['DESIGN_REVIEW', '待设计审核'],
+  ['DESIGN_APPROVED', '设计已完成'],
+] as const;
+
+const statusLabels: Record<string, string> = {
+  DRAFT: '草稿', SUBMITTED: '待主管审批', OPS_REJECTED: '退回补充', OPS_APPROVED: '待设计分配',
+  DESIGN_ASSIGNED: '已分配', IN_DESIGN: '设计中', DESIGN_REVIEW: '待设计审核', DESIGN_APPROVED: '设计已完成', COMPLETED: '设计已完成',
+};
+const statusColors: Record<string, string> = { DRAFT: 'default', SUBMITTED: 'warning', OPS_REJECTED: 'error', OPS_APPROVED: 'processing', DESIGN_ASSIGNED: 'blue', IN_DESIGN: 'processing', DESIGN_REVIEW: 'gold', DESIGN_APPROVED: 'success', COMPLETED: 'success' };
+
+function formatTime(value?: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}
+
+function emptyText(view: string) {
+  if (view === 'draft') return '暂无草稿，可新建法旨';
+  if (view === 'returnedForSupplement') return '暂无需要补充资料的法旨';
+  if (view === 'processing') return '暂无处理中法旨';
+  if (view === 'designCompleted') return '暂无设计已完成的法旨';
+  return '暂无符合当前筛选条件的法旨';
+}
+
+export default function OperatorDecreeList() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<any>({ items: [], total: 0, operatorScopeCounts: {} });
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [searchText, setSearchText] = useState('');
+
+  const filters = useMemo(() => {
+    const params = new URLSearchParams(queryString);
+    return {
+      view: viewOptions.some(([value]) => value === params.get('view')) ? params.get('view')! : 'all',
+      createdRange: params.get('createdRange') === 'thisWeek' ? 'thisWeek' : undefined,
+      status: params.get('status') || undefined,
+      priority: params.get('priority') || undefined,
+      search: params.get('search') || '',
+      page: Number(params.get('page') || 1),
+      pageSize: Number(params.get('pageSize') || 20),
+    };
+  }, [queryString]);
+
+  const sync = (next: Record<string, any>) => {
+    const params = new URLSearchParams();
+    if (next.view && next.view !== 'all') params.set('view', next.view);
+    else params.set('view', 'all');
+    if (next.createdRange) params.set('createdRange', next.createdRange);
+    if (next.status) params.set('status', next.status);
+    if (next.priority) params.set('priority', next.priority);
+    if (next.search) params.set('search', next.search);
+    if (next.page && next.page !== 1) params.set('page', String(next.page));
+    if (next.pageSize && next.pageSize !== 20) params.set('pageSize', String(next.pageSize));
+    router.replace(`/dashboard/fazhi?${params.toString()}`, { scroll: false });
+  };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const response = await taskApi.findAll(filters);
+      setData(response.data.data || response.data);
+      setSelectedIds([]);
+    } catch (error) {
+      message.error(getErrorMessage(error, '加载我的法旨失败'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [queryString]);
+  useEffect(() => { setSearchText(filters.search); }, [filters.search]);
+
+  const change = (patch: Record<string, any>) => sync({ ...filters, ...patch });
+  const items = data.items || [];
+  const scopeCounts = data.operatorScopeCounts || {};
+  const selectedRows = items.filter((row: any) => selectedIds.includes(row.id));
+  const allDrafts = selectedRows.length > 0 && selectedRows.every((row: any) => row.workflowStatus === 'DRAFT');
+  const allPageDrafts = items.filter((row: any) => row.workflowStatus === 'DRAFT');
+  const compatibleStatusOptions = statusOptions.filter(([value]) => {
+    if (filters.view === 'draft') return value === 'DRAFT';
+    if (filters.view === 'returnedForSupplement') return value === 'OPS_REJECTED';
+    if (filters.view === 'designCompleted') return value === 'DESIGN_APPROVED';
+    if (filters.view === 'processing') return ['SUBMITTED', 'OPS_APPROVED', 'DESIGN_ASSIGNED', 'IN_DESIGN', 'DESIGN_REVIEW'].includes(value);
+    return true;
+  });
+
+  const openDetail = (id: number) => {
+    const returnTo = `/dashboard/fazhi?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '' && value !== 1 && value !== 20).map(([key, value]) => [key, String(value)])).toString()}`;
+    router.push(`/dashboard/fazhi/${id}?returnTo=${encodeURIComponent(returnTo)}`);
+  };
+
+  const deleteDrafts = async (ids = selectedIds) => {
+    const rows = items.filter((row: any) => ids.includes(row.id));
+    if (!ids.length || !rows.every((row: any) => row.workflowStatus === 'DRAFT')) return;
+    try {
+      const response = await taskApi.batchDelete({ taskIds: ids });
+      const result = response.data.data || response.data;
+      message.success(`已删除 ${result.successCount} 条草稿`);
+      load();
+    } catch (error) { message.error(getErrorMessage(error, '删除草稿失败')); }
+  };
+
+  const download = async (row: any) => {
+    const attachment = (row.imageTasks || []).flatMap((image: any) => image.attachments || [])[0];
+    if (!attachment) return message.info('该法旨暂未找到可下载的设计完成稿');
+    try {
+      const response = await attachmentApi.download(attachment.id);
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url; link.download = attachment.fileName || `${row.serialNumber}-设计完成稿`;
+      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    } catch (error) { message.error(getErrorMessage(error, '下载设计完成稿失败')); }
+  };
+
+  const columns: any[] = [
+    ...(filters.view === 'draft' ? [{
+      title: <Checkbox checked={allPageDrafts.length > 0 && allPageDrafts.every((row: any) => selectedIds.includes(row.id))} indeterminate={selectedIds.length > 0 && !allPageDrafts.every((row: any) => selectedIds.includes(row.id))} onChange={(event) => setSelectedIds(event.target.checked ? allPageDrafts.map((row: any) => row.id) : [])} />,
+      width: 44,
+      render: (_: any, row: any) => <Checkbox checked={selectedIds.includes(row.id)} onChange={(event) => setSelectedIds(event.target.checked ? [...selectedIds, row.id] : selectedIds.filter((id) => id !== row.id))} />,
+    }] : []),
+    { title: '法旨编号', dataIndex: 'serialNumber', width: 150, render: (value: string, row: any) => <Button type="link" style={{ padding: 0 }} onClick={() => openDetail(row.id)}>{value}</Button> },
+    { title: '产品编号', dataIndex: 'productCode', width: 130, render: (value: string) => value || '-' },
+    { title: '店铺', dataIndex: ['store', 'name'], width: 120, render: (value: string) => value || '-' },
+    { title: '需求类型', dataIndex: ['requirementType', 'name'], width: 120, render: (value: string) => value || '-' },
+    { title: '有效图片', width: 90, render: (_: any, row: any) => `${row._count?.imageTasks ?? 0} 张` },
+    { title: '当前状态', width: 130, render: (_: any, row: any) => <Tag color={statusColors[row.workflowStatus]}>{statusLabels[row.workflowStatus] || row.workflowStatus}</Tag> },
+    { title: '当前处理环节', width: 150, render: (_: any, row: any) => statusLabels[row.workflowStatus] || row.workflowStatus },
+    { title: '优先级', dataIndex: 'priority', width: 90, render: (value: string) => <Tag color={value === 'URGENT' ? 'red' : 'default'}>{value === 'URGENT' ? '加急' : '普通'}</Tag> },
+    { title: '最近更新', dataIndex: 'updatedAt', width: 135, render: formatTime },
+    { title: '操作', fixed: 'right', width: 190, render: (_: any, row: any) => {
+      const draft = row.workflowStatus === 'DRAFT';
+      const returned = row.workflowStatus === 'OPS_REJECTED';
+      const complete = ['DESIGN_APPROVED', 'COMPLETED'].includes(row.workflowStatus);
+      return <Space size={2} wrap>
+        {draft && <Button size="small" onClick={() => openDetail(row.id)}>继续编辑</Button>}
+        {draft && <Popconfirm title="确认删除该草稿？" onConfirm={() => deleteDrafts([row.id])}><Button size="small" danger icon={<DeleteOutlined />}>删除</Button></Popconfirm>}
+        {returned && <Button size="small" onClick={() => openDetail(row.id)}>查看原因</Button>}
+        {returned && <Button size="small" type="primary" onClick={() => openDetail(row.id)}>补充资料</Button>}
+        {returned && <Button size="small" onClick={() => openDetail(row.id)}>重新提交</Button>}
+        {row.workflowStatus === 'SUBMITTED' && <Button size="small" onClick={() => openDetail(row.id)}>查看详情</Button>}
+        {!draft && !returned && !complete && row.workflowStatus !== 'SUBMITTED' && <Button size="small" onClick={() => openDetail(row.id)}>查看进度</Button>}
+        {complete && <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(row.id)}>查看成果</Button>}
+        {complete && <Button size="small" icon={<DownloadOutlined />} onClick={() => download(row)}>下载附件</Button>}
+        {complete && <Button size="small" onClick={() => openDetail(row.id)}>详情</Button>}
+      </Space>;
+    } },
+  ];
+
+  return <div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+      <div><h1 style={{ fontSize: 28, margin: 0 }}>我的法旨</h1><span style={{ color: '#71717a' }}>跟进我提交的法旨与设计进度</span></div>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => router.push('/dashboard/fazhi/new')}>新建法旨</Button>
+    </div>
+    <Card style={{ marginBottom: 16 }}>
+      <Space wrap>
+        {viewOptions.map(([value, label]) => <Button key={value} type={filters.view === value && !filters.createdRange ? 'primary' : 'default'} onClick={() => change({ view: value, createdRange: undefined, status: undefined, page: 1 })}>{label} {scopeCounts[value === 'draft' ? 'drafts' : value] ?? 0}</Button>)}
+      </Space>
+    </Card>
+    <Card style={{ marginBottom: 16 }}>
+      <Space wrap style={{ width: '100%' }}>
+        <Input value={searchText} onChange={(event) => setSearchText(event.target.value)} onPressEnter={() => change({ search: searchText, page: 1 })} prefix={<SearchOutlined />} placeholder="搜索法旨编号、产品编号、店铺" style={{ width: 340 }} />
+        <Select allowClear value={filters.status} placeholder="当前状态" style={{ width: 180 }} onChange={(status) => change({ status, page: 1 })} options={compatibleStatusOptions.map(([value, label]) => ({ value, label }))} />
+        <Select allowClear value={filters.priority} placeholder="优先级" style={{ width: 130 }} onChange={(priority) => change({ priority, page: 1 })} options={[{ value: 'URGENT', label: '加急' }, { value: 'NORMAL', label: '普通' }]} />
+        <Button type="primary" onClick={() => change({ search: searchText, page: 1 })}>筛选</Button>
+        <Button onClick={() => change({ view: 'all', createdRange: undefined, status: undefined, priority: undefined, search: '', page: 1 })}>重置</Button>
+      </Space>
+    </Card>
+    <Card>
+      {filters.view === 'draft' && <div style={{ marginBottom: 12 }}><Popconfirm title="仅删除当前选中的草稿，确认继续？" onConfirm={() => deleteDrafts()}><Button danger disabled={!allDrafts}>批量删除草稿</Button></Popconfirm>{selectedIds.length > 0 && !allDrafts && <span style={{ marginLeft: 8, color: '#b91c1c' }}>仅可选择草稿删除</span>}</div>}
+      <Table rowKey="id" size="middle" loading={loading} columns={columns} dataSource={items} scroll={{ x: 1450 }} pagination={false} locale={{ emptyText: <Empty description={emptyText(filters.view)} /> }} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}><Pagination current={filters.page} pageSize={filters.pageSize} total={data.total || 0} showSizeChanger showTotal={(total) => `共 ${total} 条`} onChange={(page, pageSize) => change({ page, pageSize })} /></div>
+    </Card>
+  </div>;
+}

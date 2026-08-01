@@ -32,9 +32,8 @@ const getMenuItems = (role: string) => {
   if (role === "OPERATION") {
     return [
       ...common,
-      fazhiCenter,
+      { key: "/dashboard/fazhi?view=all", icon: <FileTextOutlined />, label: "我的法旨" },
       { key: "/dashboard/fazhi/new", icon: <FileTextOutlined />, label: "新建法旨" },
-      { key: "/dashboard/fazhi?scope=processing", icon: <FileTextOutlined />, label: "我的法旨" },
       notifications,
     ];
   }
@@ -130,7 +129,9 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
   if (loading) return <Loading />;
 
   const scope = searchParams.get("scope");
-  const selectedKey = pathname === "/dashboard/fazhi" && scope
+  const selectedKey = pathname === "/dashboard/fazhi" && user?.role === "OPERATION"
+    ? "/dashboard/fazhi?view=all"
+    : pathname === "/dashboard/fazhi" && scope
     ? `/dashboard/fazhi?scope=${scope}`
     : "/" + pathname.split("/").slice(1, 3).join("/");
 
@@ -188,7 +189,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             style={{ border: "none", marginTop: 8 }} />
         </Sider>
         <Content style={{ marginLeft: collapsed ? 80 : 220, padding: 24, minHeight: "calc(100vh - 64px)", transition: "margin-left 0.2s", background: "#f5f5f5" }}>
-          <BreadcrumbNav />
+          <BreadcrumbNav role={user?.role} />
           {children}
           <FeedbackWidget />
         </Content>

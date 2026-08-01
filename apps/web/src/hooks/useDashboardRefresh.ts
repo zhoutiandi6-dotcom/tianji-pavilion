@@ -48,18 +48,21 @@ export function useDashboardRefresh({
       if (document.visibilityState === 'visible') onFocus();
     };
     const onDashboardMutation = () => onFocus();
+    const onPageShow = () => onFocus();
     const coreTimer = window.setInterval(() => void runCore(), coreIntervalMs);
     const analyticsTimer = refreshAnalytics
       ? window.setInterval(() => void runAnalytics(), analyticsIntervalMs)
       : undefined;
 
     window.addEventListener('focus', onFocus);
+    window.addEventListener('pageshow', onPageShow);
     window.addEventListener('tianji:dashboard-refresh', onDashboardMutation);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       window.clearInterval(coreTimer);
       if (analyticsTimer) window.clearInterval(analyticsTimer);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('tianji:dashboard-refresh', onDashboardMutation);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };

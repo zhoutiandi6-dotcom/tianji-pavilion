@@ -28,6 +28,7 @@ import Loading from "@/components/Loading";
 import DesignManagerDashboard from "@/components/design-manager-dashboard/DesignManagerDashboard";
 import OperationManagerDashboard from "@/components/operation-manager-dashboard/OperationManagerDashboard";
 import DesignerDashboard from "@/components/designer-dashboard/DesignerDashboard";
+import OperatorDashboard from "@/components/operator-dashboard/OperatorDashboard";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 import { displayUserName } from "@/lib/display";
 
@@ -147,6 +148,10 @@ export default function DashboardPage() {
 
   if (user?.role === "OPERATION_MANAGER") {
     return <OperationManagerDashboard user={user} roleData={data.roleData} />;
+  }
+
+  if (user?.role === "OPERATION") {
+    return <OperatorDashboard user={user} roleData={data.roleData} loading={loading} error={error} onRefresh={() => loadDashboard(true)} />;
   }
 
   const cards = data.cards || [];

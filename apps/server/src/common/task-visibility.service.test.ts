@@ -34,4 +34,29 @@ describe("TaskVisibilityService", () => {
     expect(service.visibleWhere("GUEST", 10)).toEqual({ id: -1 });
     expect(service.visibleWhere("UNKNOWN", 10)).toEqual({ id: -1 });
   });
+
+  it("keeps ordinary-operator views owned by the current operator", () => {
+    expect(service.scopeWhere("all", "OPERATION", 7)).toEqual({ deletedAt: null, creatorId: 7 });
+    expect(service.scopeWhere("pending-operations-approval", "OPERATION", 7)).toEqual({
+      AND: [{ deletedAt: null, creatorId: 7 }, { workflowStatus: "SUBMITTED" }],
+    });
+  });
+
+  it("keeps operations-manager returns separate from design-flow processing", () => {
+    expect(service.scopeWhere("returned-for-supplement", "OPERATION", 7)).toEqual({
+      AND: [{ deletedAt: null, creatorId: 7 }, { workflowStatus: "OPS_REJECTED" }],
+    });
+    expect(service.scopeWhere("processing", "OPERATION", 7)).toEqual({
+      AND: [
+        { deletedAt: null, creatorId: 7 },
+        { workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"] } },
+      ],
+    });
+  });
+
+  it("exposes completed decrees only after the design workflow reaches its approved state", () => {
+    expect(service.scopeWhere("design-completed", "OPERATION", 7)).toEqual({
+      AND: [{ deletedAt: null, creatorId: 7 }, { workflowStatus: { in: ["DESIGN_APPROVED", "COMPLETED"] } }],
+    });
+  });
 });

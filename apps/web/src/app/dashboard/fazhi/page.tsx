@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Checkbox, Col, Dropdown, Empty, Input, Modal, Pagination, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography, message } from "antd";
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { authApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayRequester, displayUserName } from "@/lib/display";
 import TaskAssignmentModal from "@/components/TaskAssignmentModal";
+import OperatorDecreeList from "@/components/operator-dashboard/OperatorDecreeList";
+import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 
 const { Title, Text } = Typography;
 
@@ -76,7 +78,7 @@ export default function FazhiListPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [designers, setDesigners] = useState<any[]>([]);
   const [assignment, setAssignment] = useState<{ taskIds: number[]; mode: "ASSIGN" | "REASSIGN" } | null>(null);
-  const [review, setReview] = useState<{ taskIds: number[]; action: "APPROVE" | "REJECT" } | null>(null);
+  const [review, setReview] = useState<{ taskIds: number[]; action: "APPROVE" | "REJECT"; imageTaskId?: number } | null>(null);
   const [reviewRemark, setReviewRemark] = useState("");
 
   const role = currentUser?.role || "";
@@ -118,7 +120,7 @@ export default function FazhiListPage() {
     if (shouldLoad) loadData(next);
   };
 
-  const loadData = async (next = filters) => {
+  const loadData = useCallback(async (next: any) => {
     setLoading(true);
     try {
       const requestFilters = { ...next };
@@ -134,7 +136,7 @@ export default function FazhiListPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     authApi.getMe().then((res) => setCurrentUser(res.data.data || res.data)).catch(() => {});
@@ -167,7 +169,11 @@ export default function FazhiListPage() {
     };
     setFilters(initialFilters);
     loadData(initialFilters);
-  }, [queryString]);
+  }, [queryString, loadData]);
+
+  const refreshList = useCallback(() => loadData(filters), [filters, loadData]);
+
+  useDashboardRefresh({ refreshCore: refreshList });
 
   const setFilter = (patch: any) => setFilters((prev: any) => ({ ...prev, ...patch }));
   const search = () => applyFilters({ ...filters, page: 1 });
@@ -192,10 +198,24 @@ export default function FazhiListPage() {
     if (!review) return;
     if (review.action === "REJECT" && !reviewRemark.trim()) return message.warning("请填写退回原因");
     try {
-      await imageTaskApi.batchReviewTasks({ taskIds: review.taskIds, action: review.action, remark: reviewRemark.trim() || undefined });
+      if (review.imageTaskId) {
+        if (review.action === "APPROVE") await imageTaskApi.approveReview(review.imageTaskId, reviewRemark.trim() || undefined);
+        else await imageTaskApi.rejectReview(review.imageTaskId, reviewRemark.trim());
+      } else {
+        await imageTaskApi.batchReviewTasks({ taskIds: review.taskIds, action: review.action, remark: reviewRemark.trim() || undefined });
+      }
       message.success(review.action === "APPROVE" ? "审核已通过" : "已退回修改");
       setReview(null); setReviewRemark(""); loadData(filters);
     } catch (err) { message.error(getErrorMessage(err)); }
+  };
+
+  const openSingleImageReview = (row: any, action: "APPROVE" | "REJECT") => {
+    const submittedImageTasks = (row.imageTasks || []).filter((item: any) => item.status === "SUBMITTED_FOR_REVIEW");
+    if (submittedImageTasks.length !== 1) {
+      message.warning("请进入法旨详情逐张审核图片任务");
+      return;
+    }
+    setReview({ taskIds: [], imageTaskId: submittedImageTasks[0].id, action });
   };
 
   const selectableRows = useMemo(() => (data.items || []).filter(canSetPriority), [data.items, role]);
@@ -337,6 +357,8 @@ export default function FazhiListPage() {
   const statusOptions = Object.entries(statusLabels)
     .filter(([value]) => isDraftScope ? value === "DRAFT" : isArchivedScope ? ARCHIVE_STATUSES.includes(value) : value !== "DRAFT" && !ARCHIVE_STATUSES.includes(value))
     .map(([value, label]) => ({ value, label }));
+
+  if (role === "OPERATION") return <OperatorDecreeList />;
 
   if (isOpsApprovalScope) {
     const queueItems = data.items || [];
@@ -559,8 +581,8 @@ export default function FazhiListPage() {
                   <Space size={4} style={{ justifyContent: "flex-end", whiteSpace: "nowrap" }}>
                     {canAssignDesign(row) && <Button size="small" type="link" onClick={() => setAssignment({ taskIds: [row.id], mode: "ASSIGN" })}>分配</Button>}
                     {canReassignDesign(row) && <Button size="small" type="link" onClick={() => setAssignment({ taskIds: [row.id], mode: "REASSIGN" })}>改派</Button>}
-                    {canReviewDesign(row) && <Button size="small" type="link" onClick={() => setReview({ taskIds: [row.id], action: "APPROVE" })}>审核</Button>}
-                    {canReviewDesign(row) && <Button size="small" type="link" danger onClick={() => setReview({ taskIds: [row.id], action: "REJECT" })}>退回</Button>}
+                    {canReviewDesign(row) && <Button size="small" type="link" onClick={() => openSingleImageReview(row, "APPROVE")}>审核</Button>}
+                    {canReviewDesign(row) && <Button size="small" type="link" danger onClick={() => openSingleImageReview(row, "REJECT")}>退回</Button>}
                     {canDelete && (
                       <Popconfirm title={"\u786e\u8ba4\u5220\u9664\u8be5\u6cd5\u65e8\uff1f"} onConfirm={() => deleteTask(row)}>
                         <Tooltip title={"\u5220\u9664"}>

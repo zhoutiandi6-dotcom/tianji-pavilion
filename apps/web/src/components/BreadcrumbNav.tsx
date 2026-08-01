@@ -16,7 +16,7 @@ const pathMap: Record<string, string> = {
   "feedback": "反馈管理",
 };
 
-export default function BreadcrumbNav() {
+export default function BreadcrumbNav({ role }: { role?: string }) {
   const path = usePathname();
   const searchParams = useSearchParams();
   const segments = path.split("/").filter(Boolean);
@@ -26,7 +26,7 @@ export default function BreadcrumbNav() {
     ...segments.slice(1).map((s, i) => {
       const scope = path === "/dashboard/fazhi" ? searchParams.get("scope") : null;
       const scopeLabel = scope === "design-assignment" ? "待分配" : scope === "design-reviews" ? "待审核" : scope === "design-tasks" ? "设计任务" : scope === "ops-approvals" ? "待我审批" : null;
-      const label = scopeLabel || pathMap[s] || s;
+      const label = scopeLabel || (role === "OPERATION" && s === "fazhi" ? "我的法旨" : pathMap[s] || s);
       const href = "/" + segments.slice(0, i + 2).join("/");
       if (i === segments.slice(1).length - 1) return { title: label };
       return { title: label, href };

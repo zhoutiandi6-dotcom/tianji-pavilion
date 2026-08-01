@@ -116,3 +116,96 @@ describe("DashboardRoleService designer aggregation", () => {
     expect(result.designer.summary.plannedImageCount).toBe(0);
   });
 });
+
+describe("DashboardRoleService operator aggregation", () => {
+  it("limits operator progress, completion and return data to decrees created by the current operator", async () => {
+    const prisma: any = {
+      task: { findMany: jest.fn() },
+      auditEvent: { findMany: jest.fn() },
+    };
+    const service = new DashboardRoleService(
+      prisma,
+      { visibleWhere: jest.fn(), scopeWhere: jest.fn() } as any,
+      { getWeekOverview: jest.fn() } as any,
+      { getWeekOverview: jest.fn() } as any,
+    );
+    const now = new Date();
+    const createdBeforeCurrentWeek = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+    prisma.task.findMany.mockResolvedValue([
+      {
+        id: 21,
+        creatorId: 7,
+        serialNumber: "FZ-21",
+        productCode: "SKU-21",
+        workflowStatus: "DESIGN_REVIEW",
+        priority: "NORMAL",
+        createdAt: createdBeforeCurrentWeek,
+        updatedAt: now,
+        store: { name: "店铺 A" },
+        requirementType: { name: "主图" },
+        imageTasks: [
+          { id: 201, status: "APPROVED", approvedAt: now, designerId: 9, designer: { username: "designer-a" }, attachments: [{ id: 31, fileName: "done.png", uploadedAt: now }] },
+          { id: 202, status: "SUBMITTED_FOR_REVIEW", approvedAt: null, designerId: 9, designer: { username: "designer-a" }, attachments: [] },
+        ],
+        approvalRecords: [],
+      },
+      {
+        id: 22,
+        creatorId: 7,
+        serialNumber: "FZ-22",
+        productCode: "SKU-22",
+        workflowStatus: "OPS_REJECTED",
+        priority: "URGENT",
+        createdAt: now,
+        updatedAt: now,
+        store: { name: "店铺 B" },
+        requirementType: { name: "详情" },
+        imageTasks: [{ id: 203, status: "WAITING_OPS_APPROVAL", approvedAt: null, designerId: null, designer: null, attachments: [] }],
+        approvalRecords: [{ comment: "请补充参考图", createdAt: now, approver: { displayName: "运营主管" } }],
+      },
+      {
+        id: 23,
+        creatorId: 7,
+        serialNumber: "FZ-23",
+        productCode: "SKU-23",
+        workflowStatus: "DESIGN_APPROVED",
+        priority: "NORMAL",
+        createdAt: now,
+        updatedAt: now,
+        store: { name: "店铺 C" },
+        requirementType: { name: "主图" },
+        imageTasks: [{ id: 204, status: "APPROVED", approvedAt: now, designerId: 9, designer: { username: "designer-a" }, attachments: [] }],
+        approvalRecords: [],
+      },
+    ]);
+    prisma.auditEvent.findMany.mockResolvedValue([
+      { id: 1, resourceType: "task", resourceId: 21, action: "assign_designer", createdAt: now },
+      { id: 2, resourceType: "image_task", resourceId: 202, action: "submit_review", createdAt: now },
+    ]);
+
+    const result = await service.get("OPERATION", 7) as any;
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { creatorId: 7, deletedAt: null } }));
+    expect(result.source).toBe("database");
+    expect(result.operator.summary).toEqual(expect.objectContaining({
+      processingDecreeCount: 2,
+      inProductionCount: 1,
+      returnedForSupplementCount: 1,
+      designCompletedCount: 1,
+    }));
+    expect(result.operator.decreeProgress).toHaveLength(1);
+    expect(result.operator.decreeProgress[0]).toEqual(expect.objectContaining({
+      id: 21,
+      createdAt: createdBeforeCurrentWeek,
+      approvedImageCount: 1,
+      effectiveImageCount: 2,
+      completionRate: 50,
+      progress: "待设计审核",
+      currentDesigner: "designer-a",
+    }));
+    expect(result.operator.decreeProgress.find((item: any) => item.id === 22)).toBeUndefined();
+    expect(result.operator.decreeProgress.find((item: any) => item.id === 23)).toBeUndefined();
+    expect(result.operator.completedDecrees).toEqual([expect.objectContaining({ id: 23 })]);
+    expect(result.operator.recentActivities).toHaveLength(2);
+  });
+});

@@ -7,6 +7,7 @@ import { UpdateTaskDto } from "./dto/update-task.dto";
 import { BatchPriorityDto } from "./dto/batch-priority.dto";
 import { ADMIN_ROLES, DESIGN_VISIBLE_STATUSES, TaskVisibilityService } from "../common/task-visibility.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
+import { getShanghaiWeekRange } from "../common/shanghai-time";
 
 const EDITABLE_BY_OPERATOR = ["DRAFT", "OPS_REJECTED"];
 
@@ -40,8 +41,24 @@ export class TasksService {
         { store: { name: { contains: q } } },
       ] });
     }
-    const scope = String(filters.scope || (filters.view === "archive" ? "archived" : "processing"));
+    const operatorViewScopes: Record<string, string> = {
+      all: "all",
+      draft: "drafts",
+      returnedForSupplement: "returned-for-supplement",
+      processing: "processing",
+      pendingOperationsApproval: "pending-operations-approval",
+      inProduction: "in-production",
+      designCompleted: "design-completed",
+    };
+    const requestedView = String(filters.view || "");
+    const scope = userRole === "OPERATION" && operatorViewScopes[requestedView]
+      ? operatorViewScopes[requestedView]
+      : String(filters.scope || (filters.view === "archive" ? "archived" : "processing"));
     conditions.push(this.visibility.scopeWhere(scope, userRole, userId));
+    if (filters.createdRange === "thisWeek") {
+      const week = getShanghaiWeekRange();
+      conditions.push({ createdAt: { gte: week.start, lt: week.end } });
+    }
     if (filters.status) conditions.push({ workflowStatus: filters.status });
     if (filters.statusGroup === "designflow") conditions.push({ workflowStatus: { in: DESIGN_VISIBLE_STATUSES } });
     if (filters.approvalAction) {
@@ -58,7 +75,13 @@ export class TasksService {
     const where: any = { AND: conditions };
 
     const skip = (page - 1) * pageSize;
-    const listImageTasks: any = { select: { status: true, designerId: true } };
+    const listImageTasks: any = { select: { id: true, status: true, designerId: true } };
+    if (userRole === "OPERATION") {
+      listImageTasks.select.attachments = {
+        where: { deletedAt: null, category: "IMAGE_COMPLETED" },
+        select: { id: true, fileName: true },
+      };
+    }
     if (userRole === "DESIGNER") {
       listImageTasks.where = { designerId: userId };
     }
@@ -74,6 +97,15 @@ export class TasksService {
           imageGroupStatuses,
         )
       : undefined;
+    const operatorScopeCounts = userRole === "OPERATION"
+      ? {
+          all: this.prisma.task.count({ where: this.visibility.scopeWhere("all", userRole, userId) }),
+          drafts: this.prisma.task.count({ where: this.visibility.scopeWhere("drafts", userRole, userId) }),
+          returnedForSupplement: this.prisma.task.count({ where: this.visibility.scopeWhere("returned-for-supplement", userRole, userId) }),
+          processing: this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId) }),
+          designCompleted: this.prisma.task.count({ where: this.visibility.scopeWhere("design-completed", userRole, userId) }),
+        }
+      : undefined;
     const [items, total, processingCount, draftCount, archivedCount, imageMetricTotal] = await Promise.all([
       this.prisma.task.findMany({
         where,
@@ -82,7 +114,11 @@ export class TasksService {
           creator: { select: { id: true, username: true, displayName: true } },
           store: { select: { id: true, name: true } },
           requirementType: { select: { id: true, name: true } },
-          _count: { select: { imageTasks: true } },
+          _count: {
+            select: {
+              imageTasks: { where: { deletedAt: null, status: { not: "CANCELLED" } } },
+            },
+          },
           imageTasks: listImageTasks,
         } as any,
         skip,
@@ -102,6 +138,7 @@ export class TasksService {
       metricTotal: usesImageMetric ? imageMetricTotal : total,
       metricUnit: usesImageMetric ? "张" : "条",
       scopeCounts: { processing: processingCount, drafts: draftCount, archived: archivedCount },
+      operatorScopeCounts: operatorScopeCounts ? await Promise.all(Object.entries(operatorScopeCounts).map(async ([key, value]) => [key, await value] as const)).then((entries) => Object.fromEntries(entries)) : undefined,
     };
   }
 
@@ -253,7 +290,42 @@ export class TasksService {
       where: { resourceType: "task", resourceId: id },
       orderBy: { createdAt: "desc" },
     });
-    return { ...task, auditEvents };
+    const imageTaskIds = task.imageTasks.map((imageTask: any) => imageTask.id);
+    const imageReviewEvents = imageTaskIds.length
+      ? await this.prisma.auditEvent.findMany({
+          where: {
+            resourceType: "image_task",
+            resourceId: { in: imageTaskIds },
+            action: { in: ["image_task.review_rejected", "review_reject", "design_review_reject"] },
+          },
+          orderBy: { createdAt: "desc" },
+        })
+      : [];
+    const reviewerIds = Array.from(new Set(imageReviewEvents.map((event: any) => event.operatorId).filter(Boolean)));
+    const reviewers = reviewerIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: reviewerIds } },
+          select: { id: true, username: true, displayName: true },
+        })
+      : [];
+    const reviewersById = new Map(reviewers.map((reviewer: any) => [reviewer.id, reviewer]));
+    const imageReviewRejections: Record<number, any> = {};
+    for (const event of imageReviewEvents as any[]) {
+      if (imageReviewRejections[event.resourceId]) continue;
+      let metadata: any = null;
+      try {
+        metadata = event.metadata ? JSON.parse(event.metadata) : null;
+      } catch {
+        metadata = null;
+      }
+      const remark = metadata?.remark || metadata?.afterValue?.reviewRemark || null;
+      imageReviewRejections[event.resourceId] = {
+        remark,
+        reviewer: event.operatorId ? reviewersById.get(event.operatorId) || null : null,
+        reviewedAt: event.createdAt,
+      };
+    }
+    return { ...task, auditEvents, imageReviewRejections };
   }
 
   private canView(task: any, userRole?: string, userId?: number) {
@@ -270,7 +342,7 @@ export class TasksService {
   private canBatchPriority(task: any, userRole?: string, userId?: number) {
     if (ADMIN_ROLES.includes(userRole || "")) return true;
     if (userRole === "OPERATION") {
-      return task.creatorId === userId && !DESIGN_VISIBLE_STATUSES.includes(task.workflowStatus);
+      return task.creatorId === userId && task.workflowStatus === "DRAFT";
     }
     if (userRole === "OPERATION_MANAGER" || userRole === "DESIGN_MANAGER") {
       return this.canView(task, userRole, userId);
@@ -447,7 +519,8 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id }, include: { imageTasks: { select: { id: true } } } });
     if (!task) throw new NotFoundException("法旨不存在");
     if (userRole === "OPERATION" && task.creatorId !== userId) throw new ForbiddenException("只能删除自己的法旨");
-    if (!EDITABLE_BY_OPERATOR.includes(task.workflowStatus)) throw new ForbiddenException("当前状态不可删除法旨");
+    if (userRole === "OPERATION" && task.workflowStatus !== "DRAFT") throw new ForbiddenException("普通运营只能删除自己的草稿法旨");
+    if (userRole !== "OPERATION" && !EDITABLE_BY_OPERATOR.includes(task.workflowStatus)) throw new ForbiddenException("当前状态不可删除法旨");
 
     await this.prisma.$transaction(async (tx: any) => {
       const imageTaskIds = task.imageTasks.map((item: any) => item.id);

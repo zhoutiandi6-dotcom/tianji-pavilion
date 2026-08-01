@@ -20,6 +20,7 @@ export class DashboardRoleService {
     if (role === "DESIGN_MANAGER") return this.designManager(userId, role, includeAnalytics);
     if (role === "OPERATION_MANAGER") return this.operationManager(userId, role, includeAnalytics);
     if (role === "DESIGNER") return this.designer(userId);
+    if (role === "OPERATION") return this.operator(userId);
     return { source: "database", refreshedAt: new Date().toISOString() };
   }
 
@@ -319,6 +320,210 @@ export class DashboardRoleService {
         recentActivities: activityRows
           .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
           .slice(0, 10),
+      },
+    };
+  }
+
+  private async operator(userId: number) {
+    const today = getShanghaiDayRange();
+    const currentWeek = getShanghaiWeekRange();
+    const taskWhere = { creatorId: userId, deletedAt: null };
+    const tasks = await this.prisma.task.findMany({
+      where: taskWhere,
+      include: {
+        store: { select: { name: true } },
+        requirementType: { select: { name: true } },
+        imageTasks: {
+          where: { deletedAt: null, status: { not: "CANCELLED" } },
+          include: {
+            designer: { select: { id: true, username: true, displayName: true } },
+            attachments: {
+              where: { deletedAt: null, category: "IMAGE_COMPLETED" },
+              select: { id: true, fileName: true, uploadedAt: true },
+              orderBy: { uploadedAt: "desc" },
+            },
+          },
+          orderBy: { imageIndex: "asc" },
+        },
+        approvalRecords: {
+          where: { action: "OPS_REJECTED" },
+          include: { approver: { select: { username: true, displayName: true } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: [{ priority: "desc" }, { updatedAt: "desc" }, { id: "desc" }],
+      take: 100,
+    });
+
+    const taskIds = tasks.map((task: any) => task.id);
+    const imageTaskIds = tasks.flatMap((task: any) => task.imageTasks.map((image: any) => image.id));
+    const auditEvents = taskIds.length
+      ? await this.prisma.auditEvent.findMany({
+          where: {
+            action: {
+              in: [
+                "create_task", "edit_task", "submit_approval", "submit_ops_approval",
+                "ops_reject_task", "reject_task", "ops_approve_task", "approve_task",
+                "assign_designer", "batch_assign_designer", "start_making", "submit_review",
+                "review_reject", "design_review_reject", "review_approve", "design_review_approve",
+              ],
+            },
+            OR: [
+              { resourceType: "task", resourceId: { in: taskIds } },
+              { resourceType: "image_task", resourceId: { in: imageTaskIds } },
+            ],
+          },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        })
+      : [];
+
+    const cleanName = (value: unknown) => {
+      const text = value === undefined || value === null ? "" : String(value).trim();
+      return !text || /^\?+$/.test(text) || ["undefined", "null"].includes(text.toLowerCase()) ? "" : text;
+    };
+    const displayName = (person: any) => cleanName(person?.displayName) || cleanName(person?.username) || "-";
+    const effectiveImages = (task: any) => task.imageTasks || [];
+    const allApproved = (task: any) => {
+      const images = effectiveImages(task);
+      return images.length > 0 && images.every((image: any) => image.status === "APPROVED");
+    };
+    const processingWorkflows = ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"];
+    const progressLabel = (task: any) => {
+      const images = effectiveImages(task);
+      if (task.workflowStatus === "DRAFT") return "草稿";
+      if (task.workflowStatus === "OPS_REJECTED") return "退回补充";
+      if (task.workflowStatus === "SUBMITTED") return "待运营主管审批";
+      if (allApproved(task)) return "设计已完成";
+      if (images.some((image: any) => image.status === "REVISION_REQUIRED")) return "设计修改中";
+      if (images.some((image: any) => image.status === "SUBMITTED_FOR_REVIEW")) return "待设计审核";
+      if (images.some((image: any) => image.status === "IN_PROGRESS")) return "设计中";
+      if (images.some((image: any) => image.status === "NOT_STARTED")) return "已分配";
+      if (images.some((image: any) => image.status === "PENDING_ASSIGNMENT")) return "待设计分配";
+      return processingWorkflows.includes(task.workflowStatus) ? "设计流程中" : task.workflowStatus;
+    };
+    const mapTask = (task: any) => {
+      const images = effectiveImages(task);
+      const completed = images.filter((image: any) => image.status === "APPROVED");
+      const designerIds = [...new Set(images.map((image: any) => image.designerId).filter(Boolean))];
+      const designerName = !designerIds.length
+        ? "待设计主管分配"
+        : designerIds.length === 1
+          ? displayName(images.find((image: any) => image.designerId === designerIds[0])?.designer)
+          : "多人协作";
+      const latestApprovedAt = completed.reduce((latest: Date | null, image: any) => {
+        if (!image.approvedAt) return latest;
+        return !latest || image.approvedAt > latest ? image.approvedAt : latest;
+      }, null);
+      const completedAttachment = completed.flatMap((image: any) => image.attachments || [])[0] || null;
+      const latestReturn = task.approvalRecords[0] || null;
+      return {
+        id: task.id,
+        serialNumber: task.serialNumber,
+        productCode: task.productCode || "-",
+        storeName: task.store?.name || "-",
+        requirementType: task.requirementType?.name || task.overallRequirementType || "-",
+        priority: task.priority || "NORMAL",
+        workflowStatus: task.workflowStatus,
+        currentDesigner: designerName,
+        progress: progressLabel(task),
+        effectiveImageCount: images.length,
+        approvedImageCount: completed.length,
+        completionRate: images.length ? Math.round((completed.length / images.length) * 100) : null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        designCompletedAt: latestApprovedAt,
+        latestReturnReason: latestReturn?.comment || null,
+        returnedBy: latestReturn ? displayName(latestReturn.approver) : null,
+        returnedAt: latestReturn?.createdAt || null,
+        missingMaterials: latestReturn?.comment || null,
+        completedAttachmentId: completedAttachment?.id || null,
+        completedAttachmentName: completedAttachment?.fileName || null,
+      };
+    };
+
+    const rows = tasks.map(mapTask);
+    const createdThisWeek = tasks.filter((task: any) => task.createdAt >= currentWeek.start && task.createdAt < currentWeek.end);
+    const processingTasks = tasks.filter((task: any) => !allApproved(task) && task.workflowStatus !== "CANCELLED");
+    const completedTasks = tasks.filter((task: any) => task.workflowStatus !== "CANCELLED" && allApproved(task));
+    const inProductionTasks = tasks.filter((task: any) => processingWorkflows.includes(task.workflowStatus) && !allApproved(task));
+    const priorityLabels: Record<string, string> = {
+      create_task: "创建草稿",
+      edit_task: "修改法旨",
+      submit_approval: "提交运营主管审批",
+      submit_ops_approval: "提交运营主管审批",
+      ops_reject_task: "运营主管退回补充",
+      reject_task: "运营主管退回补充",
+      ops_approve_task: "运营主管放行",
+      approve_task: "运营主管放行",
+      assign_designer: "设计主管分配",
+      batch_assign_designer: "设计主管分配",
+      start_making: "设计师开始设计",
+      submit_review: "设计师提交完成稿",
+      review_reject: "设计主管退回设计师",
+      design_review_reject: "设计主管退回设计师",
+      review_approve: "设计主管审核通过",
+      design_review_approve: "设计主管审核通过",
+    };
+    const taskById = new Map(tasks.map((task: any) => [task.id, task]));
+    const imageToTaskId = new Map(tasks.flatMap((task: any) => effectiveImages(task).map((image: any) => [image.id, task.id])));
+    const activities = auditEvents.map((event: any) => {
+      const taskId = event.resourceType === "image_task" ? imageToTaskId.get(event.resourceId) : event.resourceId;
+      const task = taskById.get(taskId);
+      if (!task || !priorityLabels[event.action]) return null;
+      return {
+        id: event.id,
+        decreeId: task.id,
+        decreeNo: task.serialNumber,
+        action: event.action,
+        label: priorityLabels[event.action],
+        createdAt: event.createdAt,
+      };
+    }).filter(Boolean).slice(0, 10);
+
+    const createdThisWeekImages = createdThisWeek.flatMap((task: any) => effectiveImages(task));
+    const approvedThisWeekImages = tasks.flatMap((task: any) => effectiveImages(task))
+      .filter((image: any) => image.status === "APPROVED" && image.approvedAt && image.approvedAt >= currentWeek.start && image.approvedAt < currentWeek.end);
+    return {
+      source: "database",
+      refreshedAt: new Date().toISOString(),
+      operator: {
+        week: this.serializeWeek(currentWeek),
+        summary: {
+          processingDecreeCount: processingTasks.length,
+          pendingOperationsApprovalCount: tasks.filter((task: any) => task.workflowStatus === "SUBMITTED").length,
+          inProductionCount: inProductionTasks.length,
+          designCompletedCount: completedTasks.length,
+          returnedForSupplementCount: tasks.filter((task: any) => task.workflowStatus === "OPS_REJECTED").length,
+          createdTodayCount: tasks.filter((task: any) => task.createdAt >= today.start && task.createdAt < today.end).length,
+          createdThisWeekCount: createdThisWeek.length,
+        },
+        weekOverview: {
+          decreeCount: new Set(createdThisWeek.map((task: any) => task.id)).size,
+          totalImageCount: createdThisWeekImages.length,
+          approvedImageCount: approvedThisWeekImages.length,
+          processingImageCount: createdThisWeekImages.filter((image: any) => image.status !== "APPROVED").length,
+        },
+        decreeProgress: rows
+          .filter(
+            (row: any) =>
+              row.workflowStatus !== "DRAFT" &&
+              row.workflowStatus !== "OPS_REJECTED" &&
+              row.workflowStatus !== "CANCELLED" &&
+              row.progress !== "设计已完成",
+          )
+          .sort((left: any, right: any) => right.updatedAt.getTime() - left.updatedAt.getTime())
+          .slice(0, 10),
+        completedDecrees: rows.filter((row: any) => row.progress === "设计已完成")
+          .sort((left: any, right: any) => {
+            const priorityDiff = Number(right.priority === "URGENT") - Number(left.priority === "URGENT");
+            if (priorityDiff) return priorityDiff;
+            return new Date(right.designCompletedAt || 0).getTime() - new Date(left.designCompletedAt || 0).getTime();
+          })
+          .slice(0, 5),
+        returnedDecrees: rows.filter((row: any) => row.workflowStatus === "OPS_REJECTED").slice(0, 5),
+        recentActivities: activities,
       },
     };
   }
