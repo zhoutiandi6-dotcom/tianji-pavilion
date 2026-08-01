@@ -1,4 +1,5 @@
 import { TasksService } from "./tasks.service";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 
 describe("TasksService compatible product mapping", () => {
   const draftTask = {
@@ -37,6 +38,28 @@ describe("TasksService compatible product mapping", () => {
     expect((service as any).canBatchPriority({ creatorId: 9, workflowStatus: "DRAFT" }, "OPERATION", 9)).toBe(true);
     expect((service as any).canBatchPriority({ creatorId: 9, workflowStatus: "SUBMITTED" }, "OPERATION", 9)).toBe(false);
     expect((service as any).canBatchPriority({ creatorId: 10, workflowStatus: "DRAFT" }, "OPERATION", 9)).toBe(false);
+  });
+
+  it("keeps designer list image-status filters scoped to the current designer", async () => {
+    const prisma: any = {
+      task: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      imageTask: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new TasksService(prisma, {} as any, {} as any, new TaskVisibilityService(), {} as any);
+
+    await service.findAll(1, 20, "DESIGNER", 7, { scope: "design-tasks", imageStatus: "IN_PROGRESS" });
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        AND: [
+          new TaskVisibilityService().scopeWhere("design-tasks", "DESIGNER", 7),
+          { imageTasks: { some: { designerId: 7, status: "IN_PROGRESS" } } },
+        ],
+      },
+    }));
   });
 
   it("returns the latest design rejection reason, reviewer, and time for each visible image task", async () => {

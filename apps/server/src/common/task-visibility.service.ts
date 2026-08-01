@@ -68,7 +68,7 @@ export class TaskVisibilityService {
   }
 
   designTaskWhere(role?: string, userId?: number) {
-    this.assertDesignManager(role);
+    if (role !== "DESIGNER") this.assertDesignManager(role);
     return {
       AND: [
         this.visibleWhere(role, userId),

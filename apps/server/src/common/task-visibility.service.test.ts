@@ -1,5 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
-import { TaskVisibilityService } from "./task-visibility.service";
+import { DESIGN_UNFINISHED_IMAGE_STATUSES, TaskVisibilityService } from "./task-visibility.service";
 
 describe("TaskVisibilityService", () => {
   const service = new TaskVisibilityService();
@@ -28,6 +28,19 @@ describe("TaskVisibilityService", () => {
 
   it("rejects non design managers from design manager scopes", () => {
     expect(() => service.scopeWhere("design-reviews", "DESIGNER", 9)).toThrow(ForbiddenException);
+  });
+
+  it("allows designers to query only their assigned design-task scope", () => {
+    expect(service.scopeWhere("design-tasks", "DESIGNER", 9)).toEqual({
+      AND: [
+        service.visibleWhere("DESIGNER", 9),
+        { workflowStatus: { in: ["DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW", "DESIGN_APPROVED"] } },
+      ],
+    });
+    expect(service.imageTaskMetricWhere("design-tasks", "DESIGNER", 9)).toEqual(expect.objectContaining({
+      designerId: 9,
+      status: { in: DESIGN_UNFINISHED_IMAGE_STATUSES },
+    }));
   });
 
   it("denies unknown roles by default", () => {

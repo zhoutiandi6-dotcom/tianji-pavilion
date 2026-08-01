@@ -64,11 +64,27 @@ export class TasksService {
     if (filters.approvalAction) {
       conditions.push({ approvalRecords: { some: { approverId: userId, action: String(filters.approvalAction) } } });
     }
-    if (filters.imageStatus) conditions.push({ imageTasks: { some: { status: String(filters.imageStatus) } } });
+    if (filters.imageStatus) {
+      conditions.push({
+        imageTasks: {
+          some: userRole === "DESIGNER"
+            ? { designerId: userId, status: String(filters.imageStatus) }
+            : { status: String(filters.imageStatus) },
+        },
+      });
+    }
     const imageGroupStatuses = filters.imageGroup === "unfinished"
       ? ["PENDING_ASSIGNMENT", "NOT_STARTED", "IN_PROGRESS", "SUBMITTED_FOR_REVIEW", "REVISION_REQUIRED"]
       : undefined;
-    if (imageGroupStatuses) conditions.push({ imageTasks: { some: { status: { in: imageGroupStatuses } } } });
+    if (imageGroupStatuses) {
+      conditions.push({
+        imageTasks: {
+          some: userRole === "DESIGNER"
+            ? { designerId: userId, status: { in: imageGroupStatuses } }
+            : { status: { in: imageGroupStatuses } },
+        },
+      });
+    }
     if (filters.storeId) conditions.push({ storeId: Number(filters.storeId) });
     if (filters.requesterName) conditions.push({ requesterName: { contains: String(filters.requesterName) } });
     if (filters.priority) conditions.push({ priority: filters.priority });
