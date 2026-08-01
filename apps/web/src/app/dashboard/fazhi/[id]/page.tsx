@@ -141,7 +141,7 @@ export default function FazhiDetailPage() {
   const isDesignManager = role === "DESIGN_MANAGER";
   const isDesigner = role === "DESIGNER";
 
-  const loadTask = useCallback(async (showLoading = false) => {
+  const loadTask = useCallback(async (showLoading = false, preserveMainDraft = false) => {
     if (showLoading) setLoading(true);
     try {
       const res = await api.get(`/tasks/${id}`, {
@@ -150,16 +150,18 @@ export default function FazhiDetailPage() {
       const data = res.data.data || res.data;
       setTask(data);
       setMaterialLinks(data.materialLinks || "");
-      setMainDraft({
-        storeId: data.storeId,
-        productCode: data.productCode || "",
-        compatibleProduct: data.compatibleProduct || data.productName || "",
-        requesterName: displayRequester(data, ""),
-        priority: data.priority || "NORMAL",
-        imageCount: data.imageCount || data.imageTasks?.length || 1,
-        imageSize: data.imageSize || "",
-        requirementTypeId: data.requirementTypeId || null,
-      });
+      if (!preserveMainDraft) {
+        setMainDraft({
+          storeId: data.storeId,
+          productCode: data.productCode || "",
+          compatibleProduct: data.compatibleProduct || data.productName || "",
+          requesterName: displayRequester(data, ""),
+          priority: data.priority || "NORMAL",
+          imageCount: data.imageCount || data.imageTasks?.length || 1,
+          imageSize: data.imageSize || "",
+          requirementTypeId: data.requirementTypeId || null,
+        });
+      }
     } catch (err) {
       console.error("[fazhi-detail] load failed", err);
       message.error(getErrorMessage(err, "加载失败，请稍后重试"));
@@ -177,7 +179,7 @@ export default function FazhiDetailPage() {
     loadTask(true);
   }, [id, loadTask]);
 
-  useDashboardRefresh({ refreshCore: loadTask });
+  useDashboardRefresh({ refreshCore: () => loadTask(false, true) });
 
   useEffect(() => () => {
     if (preview.url) window.URL.revokeObjectURL(preview.url);

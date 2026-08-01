@@ -74,6 +74,46 @@ describe("TasksService compatible product mapping", () => {
     });
   });
 
+  it("persists a selected requirement type without clearing unrelated draft fields", async () => {
+    const prisma: any = {
+      task: {
+        findUnique: jest.fn().mockResolvedValue({
+          ...draftTask,
+          productCode: "SKU-001",
+          compatibleProduct: "Existing product",
+          requirementTypeId: null,
+        }),
+        update: jest.fn().mockResolvedValue(draftTask),
+      },
+      $transaction: jest.fn().mockImplementation(async (callback: any) => callback(prisma)),
+    };
+    const service = new TasksService(
+      prisma,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      {} as any,
+      { refreshPendingDecreeSnapshotInTransaction: jest.fn() } as any,
+    );
+
+    await service.update(1, { requirementTypeId: 3 }, 9, "OPERATION");
+
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: expect.objectContaining({ requirementTypeId: 3 }),
+    });
+    expect(prisma.task.update.mock.calls[0][0].data).not.toHaveProperty("productCode");
+    expect(prisma.task.update.mock.calls[0][0].data).not.toHaveProperty("compatibleProduct");
+  });
+
+  it("does not allow an unrelated operator to change a draft requirement type", async () => {
+    const prisma: any = {
+      task: { findUnique: jest.fn().mockResolvedValue(draftTask) },
+    };
+    const service = new TasksService(prisma, {} as any, {} as any, {} as any, {} as any);
+
+    await expect(service.update(1, { requirementTypeId: 3 }, 10, "OPERATION")).rejects.toThrow("只能编辑自己的法旨");
+  });
+
   it("applies a designer search filter to the image workload summary", async () => {
     const prisma: any = {
       task: {

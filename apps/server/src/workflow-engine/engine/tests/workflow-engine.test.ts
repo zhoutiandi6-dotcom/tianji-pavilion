@@ -207,6 +207,15 @@ describe("WorkflowEngine", () => {
   });
 
   describe("submission validation", () => {
+    it("reports a missing requirement type from the persisted approval field", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, requirementTypeId: null });
+
+      await expect(engine.submit(1, 1, "OPERATION")).rejects.toMatchObject({
+        response: expect.objectContaining({ message: expect.arrayContaining(["法旨缺少需求类型"]) }),
+      });
+      expect(prisma.taskSubmissionRecord.create).not.toHaveBeenCalled();
+    });
+
     it("reports a missing compatible product from the persisted approval field", async () => {
       prisma.task.findUnique.mockResolvedValue({ ...mockTask, compatibleProduct: "" });
 
