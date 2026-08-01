@@ -2,14 +2,31 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Card, List, Button, Typography, message, Tag, Empty,  Space } from "antd";
+import { Button, List, Typography, message, Space } from "antd";
 import { BellOutlined, CheckOutlined } from "@ant-design/icons";
 import api from "@/lib/api";
+import {
+  DataTableCard,
+  SecondaryEmptyState,
+  SecondaryErrorState,
+  SecondaryPageHeader,
+  SecondaryPageShell,
+  SecondaryStatusTag,
+} from "@/components/secondary-page";
+import { formatShanghaiDateTime } from "@/lib/shanghai-week";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const typeColors: Record<string, string> = {
   info: "blue", warning: "orange", success: "green", task_assigned: "purple",
+};
+
+const typeLabels: Record<string, string> = {
+  info: "系统通知",
+  warning: "提醒",
+  success: "处理结果",
+  task_assigned: "任务分配",
+  workflow: "流程通知",
 };
 
 export default function NotificationsPage() {
@@ -18,6 +35,7 @@ export default function NotificationsPage() {
   const [data, setData] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -26,19 +44,23 @@ export default function NotificationsPage() {
       const d = r.data.data || r.data;
       setData(d.items || []);
       setTotal(d.total || 0);
-    } catch { message.error("加载失败"); }
+      setError(null);
+    } catch {
+      setError("通知数据暂时无法加载，请稍后重试。");
+      message.error("加载失败");
+    }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [page]);
 
   const markRead = async (id: number) => {
-    try { await api.patch(`/notifications/${id}/read`); load(); }
+    try { await api.patch(`/notifications/${id}/read`); await load(); }
     catch { message.error("操作失败"); }
   };
 
   const markAllRead = async () => {
-    try { await api.post("/notifications/read-all"); message.success("全部已读"); load(); }
+    try { await api.post("/notifications/read-all"); message.success("全部已读"); await load(); }
     catch { message.error("操作失败"); }
   };
 
@@ -47,17 +69,31 @@ export default function NotificationsPage() {
     if (item.taskId) router.push(`/dashboard/fazhi/${item.taskId}`);
   };
 
+  const relationText = (item: any) => {
+    if (item.taskId) return `关联法旨 #${item.taskId}`;
+    if (item.imageTaskId) return `关联图片任务 #${item.imageTaskId}`;
+    return "无关联业务对象";
+  };
+
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>通知中心</Title>
-        <Button icon={<CheckOutlined />} onClick={markAllRead}>全部已读</Button>
-      </div>
-      <Card>
+    <SecondaryPageShell>
+      <SecondaryPageHeader
+        title="通知中心"
+        subtitle="查看与当前账号权限范围一致的业务通知"
+        primaryAction={{
+          key: "read-all",
+          label: "全部标记已读",
+          icon: <CheckOutlined />,
+          onClick: () => void markAllRead(),
+          disabled: !data.some((item) => !item.isRead),
+        }}
+      />
+      {error && data.length === 0 ? <SecondaryErrorState message={error} action={<Button onClick={() => void load()}>重新加载</Button>} /> : (
+      <DataTableCard title={`全部通知 ${total ? `(${total})` : ""}`} extra={error ? <Button size="small" onClick={() => void load()}>重新加载</Button> : null}>
         <List
           dataSource={data}
           loading={loading}
-          locale={{ emptyText: <Empty description="暂无通知" /> }}
+          locale={{ emptyText: <SecondaryEmptyState description="暂无通知" /> }}
           pagination={{
             current: page,
             pageSize: 20,
@@ -70,34 +106,41 @@ export default function NotificationsPage() {
               onClick={() => openNotification(item)}
               actions={[
                 !item.isRead && (
-                  <Button size="small" type="link" onClick={() => markRead(item.id)}>
+                  <Button size="small" onClick={(event) => { event.stopPropagation(); void markRead(item.id); }}>
                     标记已读
                   </Button>
                 ),
+                item.taskId && (
+                  <Button size="small" type="link" onClick={(event) => { event.stopPropagation(); void openNotification(item); }}>
+                    查看
+                  </Button>
+                ),
               ].filter(Boolean)}
-              style={{ background: item.isRead ? "transparent" : "#f0f5ff", padding: "12px 16px", marginBottom: 4, borderRadius: 4, cursor: item.taskId ? "pointer" : "default" }}
+              style={{ background: item.isRead ? "transparent" : "#f5f8ff", padding: "14px 16px", marginBottom: 2, borderBottom: "1px solid #efefed", cursor: item.taskId ? "pointer" : "default" }}
             >
               <List.Item.Meta
                 avatar={<BellOutlined style={{ fontSize: 20, color: typeColors[item.type] || "#999" }} />}
                 title={
-                  <Space>
+                  <Space wrap>
                     <Text strong={!item.isRead}>{item.title}</Text>
-                    <Tag color={item.isRead ? "default" : "blue"}>{item.isRead ? "已读" : "未读"}</Tag>
+                    <SecondaryStatusTag status={item.isRead ? "READ" : "UNREAD"} />
+                    <Text type="secondary" style={{ fontSize: 12 }}>{typeLabels[item.type] || "通知"}</Text>
                   </Space>
                 }
                 description={
                   <div>
                     <Text type="secondary">{item.content}</Text>
                     <br />
-                    <Text type="secondary" style={{ fontSize: 12 }}>{new Date(item.createdAt).toLocaleString("zh-CN")}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{formatShanghaiDateTime(item.createdAt) || "-"} · {relationText(item)}</Text>
                   </div>
                 }
               />
             </List.Item>
           )}
         />
-      </Card>
-    </div>
+      </DataTableCard>
+      )}
+    </SecondaryPageShell>
   );
 }
 
