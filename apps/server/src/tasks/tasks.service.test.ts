@@ -40,7 +40,7 @@ describe("TasksService compatible product mapping", () => {
     expect((service as any).canBatchPriority({ creatorId: 10, workflowStatus: "DRAFT" }, "OPERATION", 9)).toBe(false);
   });
 
-  it("keeps designer list image-status filters scoped to the current designer", async () => {
+  it("keeps designer list image-status filters and image metrics scoped to the current designer", async () => {
     const prisma: any = {
       task: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -60,6 +60,43 @@ describe("TasksService compatible product mapping", () => {
         ],
       },
     }));
+    expect(prisma.imageTask.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        designerId: 7,
+        status: "IN_PROGRESS",
+        task: {
+          AND: [
+            new TaskVisibilityService().scopeWhere("design-tasks", "DESIGNER", 7),
+            { imageTasks: { some: { designerId: 7, status: "IN_PROGRESS" } } },
+          ],
+        },
+      }),
+    });
+  });
+
+  it("applies a designer search filter to the image workload summary", async () => {
+    const prisma: any = {
+      task: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      imageTask: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new TasksService(prisma, {} as any, {} as any, new TaskVisibilityService(), {} as any);
+
+    await service.findAll(1, 20, "DESIGNER", 7, { scope: "design-tasks", search: "OTHER-DESIGNER" });
+
+    expect(prisma.imageTask.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        designerId: 7,
+        task: expect.objectContaining({
+          AND: expect.arrayContaining([
+            expect.objectContaining({ OR: expect.any(Array) }),
+            new TaskVisibilityService().scopeWhere("design-tasks", "DESIGNER", 7),
+          ]),
+        }),
+      }),
+    });
   });
 
   it("returns the latest design rejection reason, reviewer, and time for each visible image task", async () => {

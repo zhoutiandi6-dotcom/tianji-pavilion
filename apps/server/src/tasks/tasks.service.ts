@@ -104,7 +104,7 @@ export class TasksService {
     const canReadDrafts = userRole === "OPERATION" || ADMIN_ROLES.includes(userRole || "");
     const draftWhere = canReadDrafts ? this.visibility.scopeWhere("drafts", userRole, userId) : undefined;
     const usesImageMetric = Boolean(filters.imageStatus || imageGroupStatuses) || ["design-assignment", "design-reviews", "design-tasks"].includes(scope);
-    const imageMetricWhere = usesImageMetric
+    const imageMetricBaseWhere = usesImageMetric
       ? this.visibility.imageTaskMetricWhere(
           scope,
           userRole,
@@ -112,6 +112,10 @@ export class TasksService {
           filters.imageStatus ? String(filters.imageStatus) : undefined,
           imageGroupStatuses,
         )
+      : undefined;
+    // Keep the image workload summary aligned with the same task filters used by the list.
+    const imageMetricWhere = imageMetricBaseWhere
+      ? { ...imageMetricBaseWhere, task: where }
       : undefined;
     const operatorScopeCounts = userRole === "OPERATION"
       ? {
