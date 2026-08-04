@@ -9,6 +9,7 @@
 .actionBar :global(.ant-btn) { min-height: 34px; border-radius: 6px; font-size: 13px; }
 .filterCard, .tableCard, .detailSection { min-width: 0; border: 1px solid #e2e2df; border-radius: 9px; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
 .filterCard { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 16px 18px; margin-bottom: 16px; }
+.filterCard > :global(.ant-row) { width: 100%; }
 .filterCard :global(.ant-input), .filterCard :global(.ant-select-selector), .filterCard :global(.ant-btn) { min-height: 34px; }
 .tableCard { overflow: hidden; padding: 18px 20px 14px; }
 .detailSection { padding: 20px 22px; }

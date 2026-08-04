@@ -2,15 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button, Card, Checkbox, Col, Dropdown, Empty, Input, Modal, Pagination, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography, message } from "antd";
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
+import { Button, Checkbox, Col, Dropdown, Input, Modal, Pagination, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography, message } from "antd";
+import { DownloadOutlined, EyeOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { authApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayRequester, displayUserName } from "@/lib/display";
 import TaskAssignmentModal from "@/components/TaskAssignmentModal";
 import OperatorDecreeList from "@/components/operator-dashboard/OperatorDecreeList";
+import {
+  DataTableCard,
+  FilterCard,
+  SecondaryEmptyState,
+  SecondaryPageHeader,
+  SecondaryPageShell,
+  SecondaryStatusTag,
+} from "@/components/secondary-page";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const statusLabels: Record<string, string> = {
   DRAFT: "草稿",
@@ -25,16 +33,13 @@ const statusLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 
-const statusColors: Record<string, string> = {
-  DRAFT: "default",
-  SUBMITTED: "warning",
-  OPS_REJECTED: "error",
-  OPS_APPROVED: "processing",
-  DESIGN_ASSIGNED: "blue",
-  IN_DESIGN: "purple",
-  DESIGN_REVIEW: "gold",
-  DESIGN_APPROVED: "success",
-  COMPLETED: "success",
+const roleLabels: Record<string, string> = {
+  ADMIN: "管理员",
+  SUPER_ADMIN: "管理员",
+  OPERATION: "普通运营",
+  OPERATION_MANAGER: "运营主管",
+  DESIGN_MANAGER: "设计主管",
+  DESIGNER: "设计师",
 };
 
 const designerImageStatusOptions = [
@@ -364,12 +369,18 @@ export default function FazhiListPage() {
     const queueItems = data.items || [];
     const queueSummary = data.summary || {};
     return (
-      <div>
-        <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
-          <div><Title level={4} style={{ margin: 0 }}>待运营主管审批</Title><Text type="secondary">整单审批放行或退回补充；图片仅用于资料核查，不支持局部放行。</Text></div>
-          <Space><Button onClick={() => router.push("/dashboard/weekly-operations-approval-plans")}>安排计划周</Button><Button onClick={() => router.push("/dashboard")}>返回驾驶舱</Button></Space>
-        </Row>
-        <Card style={{ marginBottom: 16 }}>
+      <SecondaryPageShell>
+        <SecondaryPageHeader
+          breadcrumb={<span>工作台 / 法旨 / 待运营主管审批</span>}
+          title="待运营主管审批"
+          subtitle="整单审批放行或退回补充；图片仅用于资料核查，不支持局部放行。"
+          meta={<Text type="secondary">当前角色：运营主管</Text>}
+          actions={[
+            { key: "weekly-plan", label: "安排计划周", onClick: () => router.push("/dashboard/weekly-operations-approval-plans") },
+            { key: "dashboard", label: "返回驾驶舱", onClick: () => router.push("/dashboard") },
+          ]}
+        />
+        <FilterCard>
           <Row gutter={[12, 12]}>
             <Col xs={24} md={10}><Input placeholder="搜索法旨编号、店铺、运营需求人、产品编号" prefix={<SearchOutlined />} value={filters.search} onChange={(event) => setFilter({ search: event.target.value })} onPressEnter={search} /></Col>
             <Col xs={12} md={5}><Select value={filters.queueFilter || "ALL"} style={{ width: "100%" }} onChange={(queueFilter) => applyFilters({ ...filters, queueFilter, page: 1 })} options={[
@@ -378,10 +389,9 @@ export default function FazhiListPage() {
             <Col xs={12} md={2}><Button type="primary" onClick={search}>筛选</Button></Col>
             <Col xs={12} md={2}><Button onClick={() => applyFilters({ page: 1, pageSize: filters.pageSize || 20, scope: "ops-approvals" })}>重置</Button></Col>
           </Row>
-        </Card>
-        <Card>
-          <Text type="secondary">待审批法旨 {queueSummary.pendingTaskCount ?? data.total ?? 0} 条 · 待审批图片 {queueSummary.pendingImageCount ?? 0} 张</Text>
-          {!queueItems.length && !loading ? <Empty description="暂无待运营主管审批的法旨" style={{ margin: "48px 0" }} /> : <div style={{ overflowX: "auto", marginTop: 14 }}>
+        </FilterCard>
+        <DataTableCard title="待审批法旨" extra={<Text type="secondary">待审批法旨 {queueSummary.pendingTaskCount ?? data.total ?? 0} 条 · 待审批图片 {queueSummary.pendingImageCount ?? 0} 张</Text>}>
+          {!queueItems.length && !loading ? <SecondaryEmptyState description="暂无待运营主管审批的法旨" /> : <div style={{ overflowX: "auto", marginTop: 14 }}>
             <div style={{ minWidth: 1160, display: "grid", gridTemplateColumns: "150px 130px 120px 120px 100px 135px 120px 110px", gap: 12, padding: "0 4px 8px", borderBottom: "1px solid #f0f0f0", color: "rgba(0,0,0,.45)", fontSize: 12 }}>
               <span>法旨编号</span><span>店铺 / 适配产品</span><span>运营需求人</span><span>产品编号</span><span>有效图片</span><span>提交信息</span><span>等待 / 状态</span><span style={{ textAlign: "right" }}>操作</span>
             </div>
@@ -395,22 +405,23 @@ export default function FazhiListPage() {
             </div>)}
           </div>}
           <div style={{ marginTop: 16, textAlign: "right" }}><Pagination current={filters.page} pageSize={filters.pageSize} total={data.total} showSizeChanger onChange={(page, pageSize) => applyFilters({ ...filters, page, pageSize })} /></div>
-        </Card>
-      </div>
+        </DataTableCard>
+      </SecondaryPageShell>
     );
   }
 
   return (
-    <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16, gap: 12 }}>
-        <Title level={4} style={{ margin: 0 }}>{role === "DESIGNER" ? "我的设计任务" : filters.scope === "design-assignment" ? "待分配" : filters.scope === "design-reviews" ? "待审核" : filters.scope === "design-tasks" ? "设计任务" : "法旨中心"}</Title>
-        <Space wrap>
-          {canExport && <Button icon={<DownloadOutlined />} onClick={exportCsv}>导出当前筛选</Button>}
-          {canCreateTask && <Button type="primary" icon={<PlusOutlined />} onClick={() => router.push("/dashboard/fazhi/new")}>新建法旨</Button>}
-        </Space>
-      </Row>
+    <SecondaryPageShell>
+      <SecondaryPageHeader
+        breadcrumb={<span>工作台 / 法旨</span>}
+        title={role === "DESIGNER" ? "我的设计任务" : filters.scope === "design-assignment" ? "待分配" : filters.scope === "design-reviews" ? "待审核" : filters.scope === "design-tasks" ? "设计任务" : "法旨中心"}
+        subtitle={role === "DESIGNER" ? "查看当前分配给我的设计任务与进度。" : "按当前权限查看法旨处理进度与待办事项。"}
+        meta={<Text type="secondary">当前角色：{role ? (roleLabels[role] || role) : "加载中"}</Text>}
+        actions={canExport ? [{ key: "export", label: "导出当前筛选", icon: <DownloadOutlined />, onClick: exportCsv }] : []}
+        primaryAction={canCreateTask ? { key: "create", label: "新建法旨", icon: <PlusOutlined />, onClick: () => router.push("/dashboard/fazhi/new") } : undefined}
+      />
 
-      {!isSupervisorScope && <Card style={{ marginBottom: 16 }}>
+      {!isSupervisorScope && <FilterCard>
         <Segmented
           value={filters.scope || "processing"}
           onChange={(value) => {
@@ -423,9 +434,9 @@ export default function FazhiListPage() {
             { label: `已完成归档 ${scopeCounts.archived ?? 0}`, value: "archived" },
           ]}
         />
-      </Card>}
+      </FilterCard>}
 
-      <Card style={{ marginBottom: 16 }}>
+      <FilterCard>
         <Row gutter={[12, 12]}>
           <Col xs={24} md={10}>
             <Input placeholder="搜索法旨编号、产品编号、兼容产品、需求人" prefix={<SearchOutlined />} value={filters.search}
@@ -459,15 +470,13 @@ export default function FazhiListPage() {
             <Button onClick={resetFilters}>重置</Button>
           </Col>
         </Row>
-      </Card>
+      </FilterCard>
 
-      <Card>
+      <DataTableCard
+        title="法旨列表"
+        extra={<Text type="secondary">{data.metricUnit === "张" ? `匹配图片任务 ${data.metricTotal ?? 0} 张，涉及法旨 ${data.total ?? 0} 条` : `共 ${data.total ?? 0} 条法旨`}</Text>}
+      >
         <div style={{ marginBottom: 12 }}>
-          <Text type="secondary">
-            {data.metricUnit === "张"
-              ? `匹配图片任务 ${data.metricTotal ?? 0} 张，涉及法旨 ${data.total ?? 0} 条`
-              : `共 ${data.total ?? 0} 条法旨`}
-          </Text>
         </div>
         {canBatchPriorityRole && (
           <Row justify="space-between" align="middle" style={{ marginBottom: 12, gap: 8 }}>
@@ -492,7 +501,7 @@ export default function FazhiListPage() {
         )}
 
         {!items.length && !loading ? (
-          <Empty description="暂无法旨数据，可调整筛选条件或新建法旨" />
+          <SecondaryEmptyState description="暂无符合当前筛选条件的法旨" action={canCreateTask ? <Button type="primary" onClick={() => router.push("/dashboard/fazhi/new")}>新建法旨</Button> : undefined} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div
@@ -524,6 +533,13 @@ export default function FazhiListPage() {
               const approved = isApprovedTask(row);
               const archived = isArchivedScope || ARCHIVE_STATUSES.includes(row.workflowStatus);
               const iconButtonStyle = { width: 30, height: 30, color: "rgba(0,0,0,0.65)" };
+              const primaryAction = canAssignDesign(row)
+                ? { label: "分配", onClick: () => setAssignment({ taskIds: [row.id], mode: "ASSIGN" }), type: "primary" as const }
+                : canReassignDesign(row)
+                  ? { label: "改派", onClick: () => setAssignment({ taskIds: [row.id], mode: "REASSIGN" }), type: "default" as const }
+                  : canReviewDesign(row)
+                    ? { label: "审核", onClick: () => openSingleImageReview(row, "APPROVE"), type: "primary" as const }
+                    : { label: isDraftScope ? "继续编辑" : archived ? "查看归档" : "查看详情", onClick: () => router.push("/dashboard/fazhi/" + row.id), type: "default" as const };
               return (
                 <div
                   key={row.id}
@@ -561,7 +577,7 @@ export default function FazhiListPage() {
                     <Text type="secondary" style={{ display: "block", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.serialNumber}</Text>
                   </div>
                   <Text style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayRequester(row)}</Text>
-                  <Tag color={statusColors[row.workflowStatus]} style={{ width: "fit-content", marginInlineEnd: 0 }}>{isDraftScope ? "未提交" : (statusLabels[row.workflowStatus] || row.workflowStatus)}</Tag>
+                  <SecondaryStatusTag status={row.workflowStatus} label={isDraftScope ? "未提交" : (statusLabels[row.workflowStatus] || row.workflowStatus)} />
                   <Tag color={row.priority === "URGENT" ? "red" : "default"} style={{ width: "fit-content", marginInlineEnd: 0 }}>{row.priority === "URGENT" ? "\u52a0\u6025" : "\u666e\u901a"}</Tag>
                   {!isDraftScope && (!archived && canApprove ? (
                     <Popconfirm title="确定通过该法旨审批吗？" onConfirm={() => approveTask(row)}>
@@ -579,27 +595,20 @@ export default function FazhiListPage() {
                     )
                   ) : <Text type="secondary">-</Text>)}
                   <Space size={4} style={{ justifyContent: "flex-end", whiteSpace: "nowrap" }}>
-                    {canAssignDesign(row) && <Button size="small" type="link" onClick={() => setAssignment({ taskIds: [row.id], mode: "ASSIGN" })}>分配</Button>}
-                    {canReassignDesign(row) && <Button size="small" type="link" onClick={() => setAssignment({ taskIds: [row.id], mode: "REASSIGN" })}>改派</Button>}
-                    {canReviewDesign(row) && <Button size="small" type="link" onClick={() => openSingleImageReview(row, "APPROVE")}>审核</Button>}
-                    {canReviewDesign(row) && <Button size="small" type="link" danger onClick={() => openSingleImageReview(row, "REJECT")}>退回</Button>}
-                    {canDelete && (
-                      <Popconfirm title={"\u786e\u8ba4\u5220\u9664\u8be5\u6cd5\u65e8\uff1f"} onConfirm={() => deleteTask(row)}>
-                        <Tooltip title={"\u5220\u9664"}>
-                          <Button size="small" type="text" icon={<DeleteOutlined style={{ fontSize: 16 }} />} style={iconButtonStyle} />
-                        </Tooltip>
-                      </Popconfirm>
-                    )}
-                    <Tooltip title={isDraftScope ? "继续编辑" : "查看"}>
-                      <Button size="small" type="text" icon={<EyeOutlined style={{ fontSize: 16 }} />} onClick={() => router.push("/dashboard/fazhi/" + row.id)} style={iconButtonStyle} />
-                    </Tooltip>
+                    <Button size="small" type={primaryAction.type} onClick={primaryAction.onClick}>{primaryAction.label}</Button>
                     <Dropdown
                       trigger={["click"]}
                       menu={{
                         items: [
+                          ...(canReviewDesign(row) ? [{ key: "reject", label: "退回修改", danger: true }] : []),
+                          ...(canDelete ? [{ key: "delete", label: "删除法旨", danger: true }] : []),
                           { key: "view", label: isDraftScope ? "继续编辑" : archived ? "\u67e5\u770b\u5f52\u6863" : "\u67e5\u770b\u8be6\u60c5" },
                         ],
                         onClick: ({ key }) => {
+                          if (key === "reject") openSingleImageReview(row, "REJECT");
+                          if (key === "delete") {
+                            Modal.confirm({ title: "确认删除该法旨？", content: "删除后不可恢复。", okButtonProps: { danger: true }, onOk: () => deleteTask(row) });
+                          }
                           if (key === "view") router.push("/dashboard/fazhi/" + row.id);
                         },
                       }}
@@ -626,11 +635,11 @@ export default function FazhiListPage() {
             }}
           />
         </div>
-      </Card>
+      </DataTableCard>
       <TaskAssignmentModal open={!!assignment} taskIds={assignment?.taskIds || []} tasks={data.items || []} designers={designers} mode={assignment?.mode} onClose={() => setAssignment(null)} onSuccess={() => loadData(filters)} />
       <Modal title={review?.action === "REJECT" ? "退回修改" : "审核通过"} open={!!review} onCancel={() => { setReview(null); setReviewRemark(""); }} onOk={submitReview} okText="确认">
         {review?.action === "REJECT" ? <Input.TextArea value={reviewRemark} onChange={(event) => setReviewRemark(event.target.value)} rows={4} placeholder="请填写退回原因（必填）" /> : <Input.TextArea value={reviewRemark} onChange={(event) => setReviewRemark(event.target.value)} rows={3} placeholder="审核备注（可选）" />}
       </Modal>
-    </div>
+    </SecondaryPageShell>
   );
 }
