@@ -93,10 +93,25 @@ export const rbacApi = {
   getPermissions: () => api.get("/roles-permissions/permissions"),
 };
 
+export type CreateTaskPayload = {
+  storeId?: number;
+  productCode?: string;
+  compatibleProduct?: string;
+  requesterName?: string;
+  operatorOwner?: string;
+  priority?: string;
+  urgent?: boolean;
+  imageCount?: number;
+  imageSize?: string;
+  usagePosition?: string;
+  requirementTypeId?: number;
+  imageTasks?: Array<{ imageTitle?: string; requirementType?: string; requirement?: string }>;
+};
+
 export const taskApi = {
   findAll: (params?: Record<string, any>) => api.get("/tasks", { params }),
   findOne: (id: number) => api.get("/tasks/" + id),
-  create: (data: any) => api.post("/tasks", data),
+  create: (data: CreateTaskPayload) => api.post("/tasks", data),
   update: (id: number, data: any) => api.patch("/tasks/" + id, data),
   remove: (id: number) => api.delete("/tasks/" + id),
   submit: (id: number) => api.post("/tasks/" + id + "/approval/submit"),

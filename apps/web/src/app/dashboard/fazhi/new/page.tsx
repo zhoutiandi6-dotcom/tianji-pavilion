@@ -23,15 +23,17 @@ function NewFazhiPageContent() {
   const imageCount = Form.useWatch("imageCount", form) || 1;
   const [loading, setLoading] = useState(true);
   const [stores, setStores] = useState<any[]>([]);
+  const [requirementTypes, setRequirementTypes] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const createdTaskIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    Promise.all([api.get("/stores"), api.get("/auth/me")])
-      .then(([storesResponse, meResponse]) => {
+    Promise.all([api.get("/stores"), api.get("/requirement-types"), api.get("/auth/me")])
+      .then(([storesResponse, requirementTypesResponse, meResponse]) => {
         setStores(storesResponse.data.data || storesResponse.data || []);
+        setRequirementTypes(requirementTypesResponse.data.data || requirementTypesResponse.data || []);
         const me = meResponse.data.data || meResponse.data;
         setCurrentUser(me);
         const defaultRequester = displayUserName(me);
@@ -92,6 +94,7 @@ function NewFazhiPageContent() {
         imageCount: count,
         imageSize: values.imageSize,
         usagePosition: values.usagePosition,
+        requirementTypeId: values.requirementTypeId,
         imageTasks,
       });
       const task = res.data.data || res.data;
@@ -156,6 +159,11 @@ function NewFazhiPageContent() {
             <Col xs={24} md={12}>
               <Form.Item name="requesterName" label="需求人">
                 <Input placeholder="默认当前登录人，如代提需求可修改" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="requirementTypeId" label="需求类型" rules={[{ required: true, message: "请选择需求类型" }]}>
+                <Select allowClear placeholder="选择需求类型" options={requirementTypes.map((item) => ({ value: item.id, label: item.name }))} />
               </Form.Item>
             </Col>
           </Row>

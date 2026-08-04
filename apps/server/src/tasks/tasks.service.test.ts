@@ -40,6 +40,31 @@ describe("TasksService compatible product mapping", () => {
     expect((service as any).canBatchPriority({ creatorId: 10, workflowStatus: "DRAFT" }, "OPERATION", 9)).toBe(false);
   });
 
+  it("persists the selected requirement type when creating a draft", async () => {
+    const created = { id: 12, serialNumber: "TEST-012" };
+    const prisma: any = {
+      task: { findFirst: jest.fn().mockResolvedValue({ id: 11 }), create: jest.fn().mockResolvedValue(created) },
+      imageTask: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      $transaction: jest.fn().mockImplementation(async (callback: any) => callback(prisma)),
+    };
+    const service = new TasksService(
+      prisma,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { publishCreated: jest.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.create({ requirementTypeId: 4, imageCount: 2 }, 9, "OPERATION");
+
+    expect(prisma.task.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ requirementTypeId: 4 }),
+    }));
+    expect(prisma.imageTask.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([expect.objectContaining({ taskId: 12 })]),
+    }));
+  });
+
   it("keeps designer list image-status filters and image metrics scoped to the current designer", async () => {
     const prisma: any = {
       task: {
