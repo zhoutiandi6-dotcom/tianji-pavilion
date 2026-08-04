@@ -8,8 +8,10 @@ import ImageAnnotationViewer, { ImageAnnotation } from "@/components/ImageAnnota
 import api, { attachmentApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayName, displayRequester, displayUserName } from "@/lib/display";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
+import { DetailSection, SecondaryEmptyState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from "@/components/secondary-page";
+import styles from "./page.module.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const taskStatusLabels: Record<string, string> = {
   DRAFT: "草稿",
@@ -735,8 +737,8 @@ export default function FazhiDetailPage() {
     message.info("当前标注为预览能力，刷新后可能丢失。");
   };
 
-  if (loading) return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" /></div>;
-  if (!task) return null;
+  if (loading) return <SecondaryPageShell><div className={styles.loadingState}><Spin size="large" /><Text type="secondary">正在加载法旨信息</Text></div></SecondaryPageShell>;
+  if (!task) return <SecondaryPageShell><SecondaryEmptyState description="法旨暂时无法显示" /></SecondaryPageShell>;
   const selectedGrouped = groupByCategory(selectedImageTask?.attachments || []);
   const selectedAnnotations = selectedImageTask ? (annotationDrafts[selectedImageTask.id] || []) : [];
   const canSelectedReview = selectedImageTask && (isDesignManager || isAdmin) && selectedImageTask.status === "SUBMITTED_FOR_REVIEW";
@@ -790,18 +792,33 @@ export default function FazhiDetailPage() {
   const allBatchRowsChecked = batchAssignableRows.length > 0 && batchAssignableRows.every((row: any) => checkedImageTaskIds.includes(row.id));
 
   return (
-    <div style={{ maxWidth: 1280, margin: "0 auto" }}>
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={goBack}>{isOperator ? "返回我的法旨" : "返回"}</Button>
-        <Title level={4} style={{ margin: 0 }}>{isOperator ? "我的法旨详情" : "法旨详情"}</Title>
-        <Tag color="blue">{taskStatusLabels[task.workflowStatus] || task.workflowStatus}</Tag>
-      </Space>
-
-      <Card
-        style={{ marginBottom: 16 }}
-        title={task.serialNumber}
+    <SecondaryPageShell>
+      <SecondaryPageHeader
+        title={isOperator ? "我的法旨详情" : "法旨详情"}
+        subtitle="查看法旨主单信息、图片任务和当前处理进度。"
+        breadcrumb="工作台 / 法旨 / 详情"
+        meta={(
+          <div className={styles.headerMeta}>
+            <strong>{task.serialNumber}</strong>
+            <SecondaryStatusTag status={task.workflowStatus} label={taskStatusLabels[task.workflowStatus] || task.workflowStatus} />
+            <span>产品编号：{task.productCode || "-"}</span>
+            <span>店铺：{task.store?.name || "-"}</span>
+            <span>需求人：{displayRequester(task)}</span>
+          </div>
+        )}
+        actions={[{
+          key: "back",
+          label: isOperator ? "返回我的法旨" : "返回",
+          icon: <ArrowLeftOutlined />,
+          onClick: goBack,
+        }]}
+      />
+      <div className={styles.pageContent}>
+      <DetailSection
+        title="基础信息"
+        description="主单信息与当前状态会在保存或流程处理后同步更新。"
         extra={(
-          <Space wrap>
+          <div className={styles.operationActions}>
             {canEditDraft && <Button icon={<SaveOutlined />} onClick={() => saveMainTask()}>保存主单信息</Button>}
             {canSubmitOps && <Button type="primary" icon={<SendOutlined />} onClick={submitApproval}>提交运营主管审批</Button>}
             {canWithdraw && <Button icon={<RollbackOutlined />} onClick={withdrawApproval}>撤回修改</Button>}
@@ -818,11 +835,11 @@ export default function FazhiDetailPage() {
                 <Button icon={<MoreOutlined />}>更多操作</Button>
               </Dropdown>
             )}
-          </Space>
+          </div>
         )}
       >
-        {canEditDraft && <Alert type="info" showIcon style={{ marginBottom: 12 }} message="填写后请先保存，再返回或提交。" />}
-        <Descriptions column={{ xs: 1, md: 4 }} size="small" bordered style={{ marginBottom: 12 }}>
+        {canEditDraft && <Alert className={styles.infoAlert} type="info" showIcon message="填写后请先保存，再返回或提交。" />}
+        <Descriptions className={styles.basicInfo} column={{ xs: 1, md: 4 }} size="small" bordered>
           <Descriptions.Item label="状态">{taskStatusLabels[task.workflowStatus] || task.workflowStatus}</Descriptions.Item>
           <Descriptions.Item label="店铺">
             {canEditDraft ? (
@@ -881,7 +898,7 @@ export default function FazhiDetailPage() {
             ),
           }]}
         />
-      </Card>
+      </DetailSection>
 
       {selectedImageTask && (
         <Card
@@ -1040,8 +1057,8 @@ export default function FazhiDetailPage() {
       )}
 
       {(isOpsManager || isOperator || isAdmin) && (
-        <Card title="提交与退回记录" style={{ marginBottom: 16 }}>
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        <DetailSection title="提交与退回记录" description="保留首次提交、退回补充与审批放行的处理历史。">
+          <Space className={styles.recordList} direction="vertical" size={10}>
             {(task.submissionRecords || []).map((record: any) => (
               <div key={`submission-${record.id}`} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
                 <Tag color={record.submissionType === "RESUBMIT" ? "orange" : "blue"}>{record.submissionType === "RESUBMIT" ? "退回后重提" : "首次提交"}</Tag>
@@ -1065,17 +1082,17 @@ export default function FazhiDetailPage() {
               try { metadata = event.metadata ? JSON.parse(event.metadata) : {}; } catch { metadata = {}; }
               return <Text key={`return-detail-${event.id}`} type="secondary">问题图片：{(metadata.issueImageTaskIds || []).length ? (metadata.issueImageTaskIds || []).join("、") : "未指定"}；问题类型：{(metadata.issueTypes || []).length ? (metadata.issueTypes || []).join("、") : "未指定"}</Text>;
             })}
-            {!task.submissionRecords?.length && !task.approvalRecords?.length && <Text type="secondary">暂无提交或退回记录</Text>}
+            {!task.submissionRecords?.length && !task.approvalRecords?.length && <SecondaryEmptyState description="暂无提交或退回记录" />}
           </Space>
-        </Card>
+        </DetailSection>
       )}
 
-      <Card
+      <DetailSection
         title={`图片任务明细 (${task.imageTasks?.length || 0})`}
       >
         {canEditDraft && <Text type="secondary">统一尺寸写主单，单张特殊尺寸写在对应图片要求中。</Text>}
         {canDesignAssign && (
-          <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }}>
+          <Card className={styles.assignmentPanel} size="small">
             <Row gutter={[12, 12]} align="middle">
               <Col xs={24} md={8}>
                 <Checkbox
@@ -1108,7 +1125,7 @@ export default function FazhiDetailPage() {
         )}
 
         {(task.imageTasks || []).length ? (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space className={styles.imageTaskList} direction="vertical" size={12}>
             {(task.imageTasks || []).map((row: any) => {
               const grouped = groupByCategory(row.attachments || []);
               const batchAssignable = isBatchAssignableImageTask(row);
@@ -1119,6 +1136,7 @@ export default function FazhiDetailPage() {
               const showListCompleted = !["WAITING_OPS_APPROVAL", "PENDING_ASSIGNMENT", "NOT_STARTED"].includes(row.status) || ["DESIGN_APPROVED", "COMPLETED"].includes(task.workflowStatus);
               return (
                 <Card
+                  className={styles.imageTaskCard}
                   key={row.id}
                   size="small"
                   title={
@@ -1162,9 +1180,9 @@ export default function FazhiDetailPage() {
             })}
           </Space>
         ) : (
-          <Text type="secondary">{isDesigner ? "暂无分配给你的图片任务，等待设计主管分配" : "暂无图片任务，可在草稿或退回状态新增图片任务"}</Text>
+          <SecondaryEmptyState description={isDesigner ? "暂无分配给你的图片任务，等待设计主管分配" : "暂无图片任务，可在草稿或退回状态新增图片任务"} />
         )}
-      </Card>
+      </DetailSection>
 
       <Modal
         open={preview.open}
@@ -1175,6 +1193,7 @@ export default function FazhiDetailPage() {
       >
         {preview.url && <Image src={preview.url} alt={preview.title || "preview"} style={{ maxWidth: "100%" }} />}
       </Modal>
-    </div>
+      </div>
+    </SecondaryPageShell>
   );
 }

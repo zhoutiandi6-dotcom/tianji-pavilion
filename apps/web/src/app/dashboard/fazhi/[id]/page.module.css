@@ -1,0 +1,123 @@
+.pageContent {
+  max-width: 1280px;
+  display: grid;
+  gap: 16px;
+}
+
+.loadingState {
+  display: grid;
+  min-height: 280px;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+}
+
+.headerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.headerMeta strong {
+  color: #222;
+  font-size: 13px;
+}
+
+.operationActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.operationActions :global(.ant-btn) {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.infoAlert {
+  margin-bottom: 16px;
+}
+
+.basicInfo :global(.ant-descriptions-view) {
+  overflow: hidden;
+  border-color: #e4e5e2;
+  border-radius: 7px;
+}
+
+.basicInfo :global(.ant-descriptions-item-label) {
+  width: 128px;
+  color: #666;
+  font-size: 12px;
+  background: #fafaf9;
+}
+
+.basicInfo :global(.ant-descriptions-item-content) {
+  min-width: 0;
+  color: #222;
+  font-size: 13px;
+}
+
+.recordList,
+.imageTaskList {
+  width: 100%;
+}
+
+.recordList :global(.ant-alert) {
+  border-radius: 6px;
+}
+
+.assignmentPanel {
+  margin-bottom: 12px;
+  border-color: #e3e7ee;
+  background: #fafcff;
+}
+
+.imageTaskCard {
+  border-color: #e3e4e1;
+  box-shadow: none;
+}
+
+.imageTaskCard :global(.ant-card-head) {
+  min-height: 46px;
+  padding: 0 16px;
+  background: #fcfcfb;
+}
+
+.imageTaskCard :global(.ant-card-body) {
+  padding: 16px;
+}
+
+@media (max-width: 900px) {
+  .pageContent {
+    max-width: none;
+  }
+
+  .operationActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .headerMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .operationActions :global(.ant-btn) {
+    flex: 1 1 auto;
+  }
+
+  .basicInfo :global(.ant-descriptions-item-label) {
+    width: 110px;
+  }
+
+  .imageTaskCard :global(.ant-card-head),
+  .imageTaskCard :global(.ant-card-body) {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}
