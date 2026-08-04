@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from "react";
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Typography, message } from "antd";
+import { Button, Col, Form, Input, InputNumber, Modal, Row, Select, Switch, Typography, message } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import api, { getErrorMessage, taskApi } from "@/lib/api";
 import RoleGate from "@/components/RoleGate";
 import { displayName, displayUserName } from "@/lib/display";
+import { DetailSection, SecondaryPageHeader, SecondaryPageShell } from "@/components/secondary-page";
+import styles from "./page.module.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 function buildImageTasks(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -114,22 +116,23 @@ function NewFazhiPageContent() {
   const normalizedCount = Math.max(1, Math.min(Number(imageCount || 1), 200));
 
   return (
-    <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={confirmLeave}>返回</Button>
-        <Title level={4} style={{ margin: 0 }}>新建法旨</Title>
-      </Space>
-
-      <Card loading={loading} title="主单基础信息">
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="先创建草稿，再进入详情页填写图片任务和上传附件。"
-        />
+    <SecondaryPageShell>
+      <SecondaryPageHeader
+        title="新建法旨"
+        subtitle="先建立主单草稿，再在详情页补充每张图片的具体需求和素材。"
+        actions={[{
+          key: "back",
+          label: "返回我的法旨",
+          icon: <ArrowLeftOutlined />,
+          onClick: confirmLeave,
+        }]}
+      />
+      <div className={styles.pageContent}>
         <Form
+          className={styles.form}
           form={form}
           layout="vertical"
+          disabled={loading}
           onFinish={onFinish}
           onValuesChange={() => setDirty(true)}
           initialValues={{
@@ -137,74 +140,78 @@ function NewFazhiPageContent() {
             urgent: false,
           }}
         >
-          <Row gutter={16}>
-            <Col xs={24} md={8}>
-              <Form.Item name="storeId" label="店铺">
-                <Select allowClear placeholder="选择店铺" options={stores.map((store) => ({ value: store.id, label: store.name }))} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item name="productCode" label="产品编号">
-                <Input placeholder="例如 P-001" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item name="compatibleProduct" label="兼容产品">
-                <Input placeholder="请输入兼容产品" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <DetailSection
+            title="基础信息"
+            description="填写主单信息后，系统会按需求张数创建对应的图片任务。"
+          >
+            <Row gutter={[20, 0]}>
+              <Col xs={24} md={8}>
+                <Form.Item name="storeId" label="店铺">
+                  <Select allowClear placeholder="选择店铺" options={stores.map((store) => ({ value: store.id, label: store.name }))} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item name="productCode" label="产品编号">
+                  <Input placeholder="例如 P-001" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item name="compatibleProduct" label="兼容产品">
+                  <Input placeholder="请输入兼容产品" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="requesterName" label="需求人">
+                  <Input placeholder="默认当前登录人，如代提需求可修改" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="requirementTypeId" label="需求类型" rules={[{ required: true, message: "请选择需求类型" }]}>
+                  <Select allowClear placeholder="选择需求类型" options={requirementTypes.map((item) => ({ value: item.id, label: item.name }))} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={5}>
+                <Form.Item name="urgent" label="是否加急" valuePropName="checked">
+                  <Switch checkedChildren="加急" unCheckedChildren="普通" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={7}>
+                <Form.Item name="imageCount" label="需求张数 / 总交付张数" rules={[{ required: true, message: "请输入需求张数" }]}>
+                  <InputNumber min={1} max={200} style={{ width: "100%" }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={7}>
+                <Form.Item name="imageSize" label="图片尺寸 / 输出规格说明">
+                  <Input placeholder="如 1000x1000 / A+ 模块统一尺寸说明" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={5}>
+                <Form.Item name="usagePosition" label="使用位置">
+                  <Input placeholder="主图、详情页、A+、广告图等" />
+                </Form.Item>
+              </Col>
+            </Row>
+          </DetailSection>
 
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item name="requesterName" label="需求人">
-                <Input placeholder="默认当前登录人，如代提需求可修改" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="requirementTypeId" label="需求类型" rules={[{ required: true, message: "请选择需求类型" }]}>
-                <Select allowClear placeholder="选择需求类型" options={requirementTypes.map((item) => ({ value: item.id, label: item.name }))} />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col xs={24} md={5}>
-              <Form.Item name="urgent" label="是否加急" valuePropName="checked">
-                <Switch checkedChildren="加急" unCheckedChildren="普通" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={7}>
-              <Form.Item name="imageCount" label="需求张数 / 总交付张数" rules={[{ required: true, message: "请输入需求张数" }]}>
-                <InputNumber min={1} max={200} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={7}>
-              <Form.Item name="imageSize" label="图片尺寸 / 输出规格说明">
-                <Input placeholder="如 1000x1000 / A+ 模块统一尺寸说明" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={5}>
-              <Form.Item name="usagePosition" label="使用位置">
-                <Input placeholder="主图、详情页、A+、广告图等" />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Card size="small" title="图片任务" style={{ marginBottom: 16 }}>
-            <Space direction="vertical" size={4}>
+          <section className={styles.taskNotice}>
+            <div>
+              <h2>图片任务说明</h2>
               <Text>系统将根据需求张数自动生成图片任务。</Text>
-              <Text type="secondary">将生成 {normalizedCount} 个图片任务。创建草稿后，请进入法旨详情页填写每张图片的具体要求、上传原图 / 参考图和标注。</Text>
-              <Text type="secondary">统一尺寸写主单，单张特殊尺寸写在对应图片要求中。</Text>
-            </Space>
-          </Card>
+            </div>
+            <div className={styles.taskNoticeMeta}>
+              <strong>将生成 {normalizedCount} 个图片任务</strong>
+              <Text type="secondary">创建草稿后，请在法旨详情页补充单张图片需求、原图或参考素材。</Text>
+              <Text type="secondary">统一尺寸写在主单，单张特殊尺寸写在对应图片要求中。</Text>
+            </div>
+          </section>
 
-          <Form.Item>
+          <div className={styles.formActions}>
+            <Button onClick={confirmLeave}>取消</Button>
             <Button type="primary" htmlType="submit" loading={submitting} disabled={submitting || !!createdTaskIdRef.current} size="large">创建草稿并生成图片任务</Button>
-          </Form.Item>
+          </div>
         </Form>
-      </Card>
-    </div>
+      </div>
+    </SecondaryPageShell>
   );
 }
 
