@@ -918,7 +918,7 @@ export default function FazhiDetailPage() {
                 </Space>
               </Col>
               <Col>
-                <Space>
+                <Space className={styles.workbenchActionBar}>
                   {canEditDraft && <Button size="small" icon={<SaveOutlined />} onClick={() => saveImageTask(selectedImageTask)}>保存图片需求</Button>}
                   {designerProductionStage && selectedImageTask.status !== "IN_PROGRESS" && <Button size="small" type="primary" onClick={startSelectedImageTask}>开始制作</Button>}
                   {designerProductionStage && selectedImageTask.status === "IN_PROGRESS" && <Button size="small" type="primary" icon={<SendOutlined />} onClick={submitSelectedImageTask}>提交审核</Button>}

@@ -29,10 +29,30 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  padding: 6px;
+  border: 1px solid #e3e7ee;
+  border-radius: 7px;
+  background: #fafcff;
 }
 
 .operationActions :global(.ant-btn) {
   min-height: 34px;
+  border-radius: 6px;
+}
+
+.workbenchActionBar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid #e3e7ee;
+  border-radius: 7px;
+  background: #fafcff;
+}
+
+.workbenchActionBar :global(.ant-btn) {
+  min-height: 30px;
   border-radius: 6px;
 }
 
@@ -95,6 +115,11 @@
   }
 
   .operationActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .workbenchActionBar {
     width: 100%;
     justify-content: flex-start;
   }
