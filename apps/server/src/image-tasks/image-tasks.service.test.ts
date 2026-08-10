@@ -25,14 +25,21 @@ describe("ImageTasksService stage A audit writes", () => {
 
   beforeEach(() => {
     prisma = {
-      user: { findFirst: jest.fn().mockResolvedValue({ id: 7 }) },
+      user: {
+        findFirst: jest.fn().mockResolvedValue({ id: 7 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       task: { findMany: jest.fn() },
       imageTask: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn().mockImplementation(({ data }) => ({ ...imageTask(), ...data })),
       },
-      auditEvent: { create: jest.fn().mockResolvedValue({ id: 100 }) },
+      auditEvent: {
+        create: jest.fn().mockResolvedValue({ id: 100 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      operationLog: { findMany: jest.fn().mockResolvedValue([]) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     log = { log: jest.fn().mockResolvedValue(undefined) };
@@ -197,5 +204,129 @@ describe("ImageTasksService stage A audit writes", () => {
     await expect(service.batchAssignTasks({ taskIds: [10], designerId: 9, mode: "REASSIGN", reason: "Normalize owner" }, 3, "DESIGN_MANAGER"))
       .rejects.toThrow("multiple designers");
     expect(prisma.imageTask.update).not.toHaveBeenCalled();
+  });
+
+  const detailImageTask = (overrides: Record<string, any> = {}) => ({
+    id: 1,
+    taskId: 10,
+    imageIndex: 1,
+    imageTitle: "Main image",
+    imageType: "MAIN",
+    requirement: "Show product clearly",
+    remark: "Keep the background clean",
+    status: "IN_PROGRESS",
+    createdAt: new Date("2026-08-10T01:00:00.000Z"),
+    updatedAt: new Date("2026-08-10T02:00:00.000Z"),
+    submittedAt: null,
+    designerId: 7,
+    designer: { id: 7, username: "designer", displayName: "Designer" },
+    assignedBy: { id: 8, username: "manager", displayName: "Design Manager" },
+    attachments: [
+      {
+        id: 20,
+        fileName: "source.png",
+        mimeType: "image/png",
+        fileSize: 2048,
+        category: "IMAGE_ORIGINAL",
+        uploadedAt: new Date("2026-08-10T01:30:00.000Z"),
+        storagePath: "attachments\\source.png",
+      },
+      {
+        id: 21,
+        fileName: "completed.png",
+        mimeType: "image/png",
+        fileSize: 4096,
+        category: "IMAGE_COMPLETED",
+        uploadedAt: new Date("2026-08-10T01:40:00.000Z"),
+        storagePath: "attachments\\completed.png",
+      },
+    ],
+    task: {
+      id: 10,
+      serialNumber: "天字第000010号法旨",
+      productCode: "TEST-DETAIL-001",
+      priority: "NORMAL",
+      requesterName: "Operator Requester",
+      creatorId: 2,
+      workflowStatus: "DESIGN_ASSIGNED",
+      creator: { id: 2, username: "operator", displayName: "Operator" },
+      store: { id: 3, name: "Test Store" },
+      requirementType: { id: 4, name: "Main image" },
+      imageTasks: [{ designerId: 7 }],
+    },
+    ...overrides,
+  });
+
+  it("returns a minimal safe detail projection for the assigned designer", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(detailImageTask());
+    prisma.auditEvent.findMany.mockResolvedValue([
+      {
+        action: "design_review_submitted",
+        operatorId: 7,
+        metadata: JSON.stringify({ reason: "Ready for review" }),
+        createdAt: new Date("2026-08-10T03:00:00.000Z"),
+      },
+    ]);
+    prisma.operationLog.findMany.mockResolvedValue([
+      {
+        action: "design_review_reject",
+        afterValue: JSON.stringify({ reviewRemark: "Improve the logo" }),
+        createdAt: new Date("2026-08-10T04:00:00.000Z"),
+        user: { id: 8, username: "manager", displayName: "Design Manager" },
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 7, username: "designer", displayName: "Designer" }]);
+
+    const result = await service.findOne(1, 7, "DESIGNER");
+
+    expect(result).toMatchObject({
+      id: 1,
+      name: "Main image",
+      decree: { id: 10, serialNumber: "天字第000010号法旨", productCode: "TEST-DETAIL-001" },
+      people: {
+        operator: { id: 2, displayName: "Operator" },
+        designer: { id: 7, displayName: "Designer" },
+        assignedBy: { id: 8, displayName: "Design Manager" },
+      },
+      sourceAttachments: [{ id: 20, fileName: "source.png", category: "IMAGE_ORIGINAL" }],
+      completedAttachments: [{ id: 21, fileName: "completed.png", category: "IMAGE_COMPLETED" }],
+      reviewHistory: expect.arrayContaining([
+        expect.objectContaining({ action: "design_review_submitted", reason: "Ready for review" }),
+        expect.objectContaining({ action: "design_review_reject", reason: "Improve the logo" }),
+      ]),
+    });
+    expect(JSON.stringify(result)).not.toMatch(/storagePath|password|token|cookie|email/i);
+    expect(prisma.auditEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ resourceType: "image_task", resourceId: 1 }),
+    }));
+    expect(prisma.operationLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ targetType: "image_task", targetId: 1 }),
+    }));
+    expect(prisma.workflowHistory).toBeUndefined();
+  });
+
+  it.each([
+    [2, "OPERATION"],
+    [9, "OPERATION_MANAGER"],
+    [8, "DESIGN_MANAGER"],
+    [99, "OWNER"],
+  ])("keeps the existing visibility scope for a legal detail reader (%s, %s)", async (userId, role) => {
+    prisma.imageTask.findUnique.mockResolvedValue(detailImageTask());
+
+    await expect(service.findOne(1, userId, role)).resolves.toMatchObject({ id: 1 });
+  });
+
+  it("rejects a different designer before returning any detail data", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(detailImageTask());
+
+    await expect(service.findOne(1, 6, "DESIGNER")).rejects.toThrow("No permission to view image task");
+    expect(prisma.auditEvent.findMany).not.toHaveBeenCalled();
+    expect(prisma.operationLog.findMany).not.toHaveBeenCalled();
+  });
+
+  it("returns not found for a missing image task", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(null);
+
+    await expect(service.findOne(404, 99, "OWNER")).rejects.toThrow("Image task not found");
   });
 });

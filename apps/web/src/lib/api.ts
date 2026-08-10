@@ -124,8 +124,56 @@ export const taskApi = {
   batchDelete: (data: { taskIds: number[] }) => api.post("/tasks/batch/delete", data),
 };
 
+export type ImageTaskDetail = {
+  id: number;
+  imageIndex: number;
+  name: string;
+  imageType: string | null;
+  status: string;
+  requirementDescription: string | null;
+  modificationRequirement: string | null;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  decree: {
+    id: number;
+    serialNumber: string;
+    productCode: string | null;
+    store: { id: number; name: string } | null;
+    requirementType: { id: number; name: string } | null;
+    priority: string;
+  };
+  people: {
+    operator: { id: number; displayName: string };
+    requesterName: string | null;
+    designer: { id: number; displayName: string } | null;
+    assignedBy: { id: number; displayName: string } | null;
+  };
+  sourceAttachments: ImageTaskDetailAttachment[];
+  completedAttachments: ImageTaskDetailAttachment[];
+  reviewHistory: ImageTaskReviewHistoryItem[];
+};
+
+export type ImageTaskDetailAttachment = {
+  id: number;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  category: string;
+  createdAt: string;
+};
+
+export type ImageTaskReviewHistoryItem = {
+  source: "AUDIT_EVENT" | "OPERATION_LOG";
+  action: string;
+  operator: { id: number; displayName: string } | null;
+  reason: string | null;
+  createdAt: string;
+};
+
 export const imageTaskApi = {
   findByTask: (taskId: number) => api.get("/image-tasks/by-task/" + taskId),
+  findOne: (id: number) => api.get<ImageTaskDetail>("/image-tasks/" + id),
   create: (data: { taskId: number; imageTitle: string; imageType?: string; requirementType?: string; requirement?: string; designerId?: number }) => api.post("/image-tasks", data),
   update: (id: number, data: any) => api.patch("/image-tasks/" + id, data),
   start: (id: number) => api.post("/image-tasks/" + id + "/start"),

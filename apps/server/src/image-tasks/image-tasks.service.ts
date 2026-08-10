@@ -17,6 +17,12 @@ import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
+import {
+  ImageTaskDetailAttachmentDto,
+  ImageTaskDetailDto,
+  ImageTaskDetailPersonDto,
+  ImageTaskReviewHistoryItemDto,
+} from "./dto/image-task-detail.dto";
 
 const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
 const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
@@ -111,12 +117,182 @@ export class ImageTasksService {
   async findOne(id: number, userId: number, userRole: string) {
     const imageTask = await this.prisma.imageTask.findUnique({
       where: { id },
-      include: { designer: true, attachments: true, task: { include: { imageTasks: { select: { designerId: true } } } } },
+      select: {
+        id: true,
+        taskId: true,
+        imageIndex: true,
+        imageTitle: true,
+        imageType: true,
+        requirement: true,
+        remark: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        submittedAt: true,
+        designerId: true,
+        designer: { select: { id: true, username: true, displayName: true } },
+        assignedBy: { select: { id: true, username: true, displayName: true } },
+        attachments: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            fileSize: true,
+            category: true,
+            uploadedAt: true,
+          },
+          orderBy: { uploadedAt: "desc" },
+        },
+        task: {
+          select: {
+            id: true,
+            serialNumber: true,
+            productCode: true,
+            priority: true,
+            requesterName: true,
+            creatorId: true,
+            workflowStatus: true,
+            creator: { select: { id: true, username: true, displayName: true } },
+            store: { select: { id: true, name: true } },
+            requirementType: { select: { id: true, name: true } },
+            imageTasks: { select: { designerId: true } },
+          },
+        },
+      },
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
     if (!this.canViewTask(imageTask.task, userId, userRole)) throw new ForbiddenException("No permission to view image task");
     if (userRole === "DESIGNER" && imageTask.designerId !== userId) throw new ForbiddenException("No permission to view image task");
-    return imageTask;
+
+    const reviewAuditActions = [
+      "design_review_submitted",
+      "design_review_resubmitted",
+      "design_review_rejected",
+      "design_review_approved",
+    ];
+    const reviewOperationActions = [
+      "submit_design_review",
+      "resubmit_design_review",
+      "design_review_reject",
+      "design_review_approve",
+    ];
+    const [auditEvents, operationLogs] = await Promise.all([
+      this.prisma.auditEvent.findMany({
+        where: {
+          resourceType: "image_task",
+          resourceId: id,
+          action: { in: reviewAuditActions },
+        },
+        select: { action: true, operatorId: true, metadata: true, createdAt: true },
+        orderBy: { createdAt: "asc" },
+      }),
+      this.prisma.operationLog.findMany({
+        where: {
+          targetType: "image_task",
+          targetId: id,
+          action: { in: reviewOperationActions },
+        },
+        select: {
+          action: true,
+          afterValue: true,
+          createdAt: true,
+          user: { select: { id: true, username: true, displayName: true } },
+        },
+        orderBy: { createdAt: "asc" },
+      }),
+    ]);
+
+    const actorIds = Array.from(new Set(auditEvents
+      .map((event) => event.operatorId)
+      .filter((actorId): actorId is number => actorId !== null)));
+    const auditActors = actorIds.length
+      ? await this.prisma.user.findMany({
+        where: { id: { in: actorIds } },
+        select: { id: true, username: true, displayName: true },
+      })
+      : [];
+    const actorById = new Map(auditActors.map((actor) => [actor.id, actor]));
+
+    const toPerson = (person: { id: number; username: string; displayName: string | null } | null): ImageTaskDetailPersonDto | null => {
+      if (!person) return null;
+      return { id: person.id, displayName: person.displayName || person.username };
+    };
+    const readReason = (raw: string | null) => {
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return typeof parsed.reviewRemark === "string" ? parsed.reviewRemark
+          : typeof parsed.remark === "string" ? parsed.remark
+            : typeof parsed.reason === "string" ? parsed.reason
+              : null;
+      } catch {
+        return null;
+      }
+    };
+    const toAttachment = (attachment: {
+      id: number;
+      fileName: string;
+      mimeType: string;
+      fileSize: number;
+      category: string;
+      uploadedAt: Date;
+    }): ImageTaskDetailAttachmentDto => ({
+      id: attachment.id,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      fileSize: attachment.fileSize,
+      category: attachment.category,
+      createdAt: attachment.uploadedAt,
+    });
+
+    const reviewHistory: ImageTaskReviewHistoryItemDto[] = [
+      ...auditEvents.map((event) => ({
+        source: "AUDIT_EVENT" as const,
+        action: event.action,
+        operator: toPerson(actorById.get(event.operatorId ?? -1) || null),
+        reason: readReason(event.metadata),
+        createdAt: event.createdAt,
+      })),
+      ...operationLogs.map((log) => ({
+        source: "OPERATION_LOG" as const,
+        action: log.action,
+        operator: toPerson(log.user),
+        reason: readReason(log.afterValue),
+        createdAt: log.createdAt,
+      })),
+    ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+
+    const sourceCategories = new Set(["IMAGE_ORIGINAL", "IMAGE_REFERENCE"]);
+    return {
+      id: imageTask.id,
+      imageIndex: imageTask.imageIndex,
+      name: imageTask.imageTitle,
+      imageType: imageTask.imageType,
+      status: imageTask.status,
+      requirementDescription: imageTask.requirement,
+      modificationRequirement: imageTask.remark,
+      createdAt: imageTask.createdAt,
+      updatedAt: imageTask.updatedAt,
+      submittedAt: imageTask.submittedAt,
+      decree: {
+        id: imageTask.task.id,
+        serialNumber: imageTask.task.serialNumber,
+        productCode: imageTask.task.productCode,
+        store: imageTask.task.store,
+        requirementType: imageTask.task.requirementType,
+        priority: imageTask.task.priority,
+      },
+      people: {
+        operator: toPerson(imageTask.task.creator)!,
+        requesterName: imageTask.task.requesterName,
+        designer: toPerson(imageTask.designer),
+        assignedBy: toPerson(imageTask.assignedBy),
+      },
+      sourceAttachments: imageTask.attachments.filter((attachment) => sourceCategories.has(attachment.category)).map(toAttachment),
+      completedAttachments: imageTask.attachments.filter((attachment) => attachment.category === "IMAGE_COMPLETED").map(toAttachment),
+      reviewHistory,
+    } satisfies ImageTaskDetailDto;
   }
 
   async batchAssign(dto: BatchAssignImageTasksDto, userId: number, userRole: string) {
