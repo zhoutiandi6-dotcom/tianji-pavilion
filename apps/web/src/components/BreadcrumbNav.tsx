@@ -6,6 +6,7 @@ import { HomeOutlined } from "@ant-design/icons";
 
 const pathMap: Record<string, string> = {
   "fazhi": "法旨中心",
+  "image-tasks": "图片任务",
   "new": "新建法旨",
   "stores": "店铺管理",
   "requirement-types": "需求类型",

@@ -1,0 +1,217 @@
+.loadingState {
+  display: grid;
+  min-height: 280px;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: #666;
+}
+
+.headerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.refreshWarning {
+  margin: -4px 0 16px;
+}
+
+.summaryGrid :global(.ant-descriptions-view) {
+  overflow: hidden;
+  border-color: #e4e5e2;
+  border-radius: 7px;
+}
+
+.summaryGrid :global(.ant-descriptions-item-label) {
+  color: #666;
+  font-size: 12px;
+  background: #fafaf9;
+}
+
+.summaryGrid :global(.ant-descriptions-item-content) {
+  min-width: 0;
+  color: #222;
+  font-size: 13px;
+}
+
+.requirementGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.requirementGrid > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e7e8e5;
+  border-radius: 7px;
+  background: #fcfcfb;
+}
+
+.longText {
+  margin: 7px 0 0 !important;
+  color: #222;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.materialColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.materialColumns > div {
+  min-width: 0;
+}
+
+.materialColumns h3 {
+  margin: 0 0 10px;
+  color: #222;
+  font-size: 14px;
+}
+
+.attachmentGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.attachmentCard {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e4e5e2;
+  border-radius: 7px;
+  background: #fcfcfb;
+}
+
+.attachmentIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 6px;
+  background: #edf4ff;
+  color: #1d5fbf;
+  font-size: 17px;
+}
+
+.attachmentMeta {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.attachmentMeta strong,
+.attachmentMeta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentMeta strong {
+  color: #222;
+  font-size: 13px;
+}
+
+.attachmentMeta span {
+  color: #777;
+  font-size: 12px;
+}
+
+.attachmentActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.attachmentActions :global(.ant-btn) {
+  min-height: 30px;
+  border-radius: 6px;
+}
+
+.historyList {
+  display: grid;
+  gap: 10px;
+}
+
+.historyItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 16px;
+  padding: 13px 14px;
+  border: 1px solid #e4e5e2;
+  border-radius: 7px;
+  background: #fcfcfb;
+}
+
+.historyItem div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.historyItem strong {
+  color: #222;
+  font-size: 13px;
+}
+
+.historyItem span,
+.historyItem time,
+.historyItem p {
+  color: #777;
+  font-size: 12px;
+}
+
+.historyItem time {
+  white-space: nowrap;
+}
+
+.historyItem p {
+  grid-column: 1 / -1;
+  margin: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.previewImage {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+@media (max-width: 900px) {
+  .requirementGrid,
+  .materialColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .attachmentCard {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .attachmentActions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .historyItem {
+    grid-template-columns: 1fr;
+  }
+
+  .historyItem time {
+    grid-row: 2;
+  }
+}
