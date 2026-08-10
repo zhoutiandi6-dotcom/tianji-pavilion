@@ -485,9 +485,9 @@ export class ImageTasksService {
       }
       const data: any = {};
       let expectedStatuses: string[] | null = null;
-      if (dto.status === "IN_PROGRESS" && ["NOT_STARTED", "REVISION_REQUIRED"].includes(imageTask.status)) {
+      if (dto.status === "IN_PROGRESS" && imageTask.status === "NOT_STARTED") {
         data.status = "IN_PROGRESS";
-        expectedStatuses = ["NOT_STARTED", "REVISION_REQUIRED"];
+        expectedStatuses = ["NOT_STARTED"];
       }
       if (dto.status === "SUBMITTED_FOR_REVIEW" && ["IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
         if (!imageTask.attachments.some((attachment: any) => attachment.category === "IMAGE_COMPLETED")) {

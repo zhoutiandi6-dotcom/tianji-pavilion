@@ -214,6 +214,23 @@ describe("ImageTasksService stage A audit writes", () => {
       .rejects.toThrow("Only the assigned designer");
   });
 
+  it("starts a NOT_STARTED task exactly once", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "NOT_STARTED",
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_ASSIGNED" },
+    }));
+
+    await service.update(1, { status: "IN_PROGRESS" } as any, 7, "DESIGNER");
+
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, designerId: 7, status: { in: ["NOT_STARTED"] }, deletedAt: null },
+      data: { status: "IN_PROGRESS" },
+    });
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a repeated start without creating another workflow update or event", async () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
@@ -226,6 +243,35 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
     expect(workflowEngine.recalcTaskStatusInTransaction).not.toHaveBeenCalled();
     expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it.each(["REVISION_REQUIRED", "SUBMITTED_FOR_REVIEW", "APPROVED", "COMPLETED"])("rejects %s start without writing audit, logs, or events", async (status) => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status,
+      reviewRemark: status === "REVISION_REQUIRED" ? "Please revise the copy" : null,
+      task: { id: 10, creatorId: 2, workflowStatus: status === "SUBMITTED_FOR_REVIEW" ? "DESIGN_REVIEW" : "DESIGN_APPROVED" },
+    }));
+
+    await expect(service.update(1, { status: "IN_PROGRESS" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Invalid image task update");
+
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditEvent.create).not.toHaveBeenCalled();
+    expect(log.log).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("rejects start by a different designer", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 8,
+      status: "NOT_STARTED",
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_ASSIGNED" },
+    }));
+
+    await expect(service.update(1, { status: "IN_PROGRESS" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Only the assigned designer");
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
   });
 
   it("allows only one concurrent submit transition and writes one submission audit", async () => {
