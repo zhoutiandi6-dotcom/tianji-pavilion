@@ -34,6 +34,7 @@ describe("ImageTasksService stage A audit writes", () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn().mockImplementation(({ data }) => ({ ...imageTask(), ...data })),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       auditEvent: {
         create: jest.fn().mockResolvedValue({ id: 100 }),
@@ -130,12 +131,16 @@ describe("ImageTasksService stage A audit writes", () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
       status: "IN_PROGRESS",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
       task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
     }));
 
     await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
 
-    expect(prisma.imageTask.update).toHaveBeenCalledWith({ where: { id: 1 }, data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", reviewStatus: "PENDING", submittedAt: expect.any(Date), submittedById: 7 }) });
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null },
+      data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", reviewStatus: "PENDING", submittedAt: expect.any(Date), submittedById: 7 }),
+    });
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
     expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "design_review_submitted", operatorId: 7 }) }));
   });
@@ -144,13 +149,105 @@ describe("ImageTasksService stage A audit writes", () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
       status: "REVISION_REQUIRED",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
       task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
     }));
 
     await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
 
-    expect(prisma.imageTask.update).toHaveBeenCalledWith({ where: { id: 1 }, data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", submittedById: 7 }) });
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null },
+      data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", submittedById: 7 }),
+    });
     expect(weeklyPlans.addAssignedTasksInTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a NOT_STARTED designer task before it can be submitted for review", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "NOT_STARTED",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_ASSIGNED" },
+    }));
+
+    await expect(service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Invalid image task update");
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("requires a completed attachment before a designer can submit for review", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "IN_PROGRESS",
+      attachments: [],
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await expect(service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("completed attachment");
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(["SUBMITTED_FOR_REVIEW", "APPROVED", "COMPLETED"])("rejects %s designer task submission", async (status) => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status,
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: status === "SUBMITTED_FOR_REVIEW" ? "DESIGN_REVIEW" : "DESIGN_APPROVED" },
+    }));
+
+    await expect(service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Invalid image task update");
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects a designer update for another designer's image task", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 8,
+      status: "IN_PROGRESS",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await expect(service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Only the assigned designer");
+  });
+
+  it("rejects a repeated start without creating another workflow update or event", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "IN_PROGRESS",
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await expect(service.update(1, { status: "IN_PROGRESS" } as any, 7, "DESIGNER"))
+      .rejects.toThrow("Invalid image task update");
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(workflowEngine.recalcTaskStatusInTransaction).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("allows only one concurrent submit transition and writes one submission audit", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "IN_PROGRESS",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+    prisma.imageTask.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    const results = await Promise.allSettled([
+      service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"),
+      service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(prisma.auditEvent.create).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
   });
 
   it("rolls back the staged assignment when its audit event fails", async () => {

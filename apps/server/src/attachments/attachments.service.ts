@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { mkdir, writeFile } from "fs/promises";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { mkdir, unlink, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { extname, join } from "path";
 import { PrismaService } from "../common/prisma.service";
@@ -11,6 +11,7 @@ const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
 const DESIGN_VISIBLE_TASK_STATUS = ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW", "DESIGN_APPROVED", "COMPLETED"];
 const TASK_CATEGORIES = ["TASK_MATERIAL", "TASK_REFERENCE", "TASK_GENERAL"];
 const IMAGE_CATEGORIES = ["IMAGE_ORIGINAL", "IMAGE_REFERENCE", "IMAGE_COMPLETED"];
+const DESIGNER_COMPLETED_ATTACHMENT_STATUSES = ["IN_PROGRESS", "REVISION_REQUIRED"];
 
 @Injectable()
 export class AttachmentsService {
@@ -77,25 +78,56 @@ export class AttachmentsService {
       throw new ForbiddenException("No permission to upload image task attachment");
     }
     const stored = await this.storeFile(file);
-    const attachment = await this.prisma.attachment.create({
-      data: {
-        taskId: null,
-        imageTaskId,
-        category,
-        fileName: file.originalname || stored.fileName,
-        fileType: file.mimetype || "application/octet-stream",
-        mimeType: file.mimetype || "application/octet-stream",
-        extension: stored.extension,
-        fileSize: file.size || file.buffer?.length || 0,
-        storagePath: stored.storagePath,
-        uploadedById: userId,
-      },
-    });
-    if (category === "IMAGE_COMPLETED") {
-      await this.prisma.imageTask.update({
-        where: { id: imageTaskId },
-        data: { completedAttachmentUrl: `/api/attachments/${attachment.id}/download` },
+    let attachment: any;
+    try {
+      attachment = await this.prisma.$transaction(async (tx: any) => {
+        const created = await tx.attachment.create({
+          data: {
+            taskId: null,
+            imageTaskId,
+            category,
+            fileName: file.originalname || stored.fileName,
+            fileType: file.mimetype || "application/octet-stream",
+            mimeType: file.mimetype || "application/octet-stream",
+            extension: stored.extension,
+            fileSize: file.size || file.buffer?.length || 0,
+            storagePath: stored.storagePath,
+            uploadedById: userId,
+          },
+        });
+        if (category === "IMAGE_COMPLETED") {
+          const currentPointer = await tx.imageTask.updateMany({
+            where: {
+              id: imageTaskId,
+              designerId: userId,
+              status: { in: DESIGNER_COMPLETED_ATTACHMENT_STATUSES },
+              deletedAt: null,
+            },
+            data: { completedAttachmentUrl: `/api/attachments/${created.id}/download` },
+          });
+          if (currentPointer.count !== 1) {
+            throw new ConflictException("Image task status has changed. Refresh and try again.");
+          }
+        }
+        return created;
       });
+    } catch (error) {
+      try {
+        await unlink(join(this.uploadRoot, stored.fileName));
+      } catch (cleanupError) {
+        try {
+          await this.log.log({
+            userId,
+            action: "upload_attachment_cleanup_failed",
+            targetType: "image_task",
+            targetId: imageTaskId,
+            content: `Failed to remove newly stored attachment after database failure: ${stored.fileName}`,
+          });
+        } catch {
+          // Preserve the original database error even when cleanup logging is unavailable.
+        }
+      }
+      throw error;
     }
     await this.writeUploadLog(category, attachment.id, attachment.fileName, userId, req);
     return attachment;
@@ -125,10 +157,30 @@ export class AttachmentsService {
     });
     if (!attachment || attachment.deletedAt) throw new NotFoundException("Attachment not found");
     if (!this.canDeleteAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to delete attachment");
+    const currentCompletedAttachmentUrl = `/api/attachments/${id}/download`;
+    if (attachment.category === "IMAGE_COMPLETED" && attachment.imageTaskId && attachment.imageTask?.completedAttachmentUrl !== currentCompletedAttachmentUrl) {
+      throw new ForbiddenException("Only the current completed attachment can be deleted");
+    }
     await this.prisma.$transaction(async (tx: any) => {
       await tx.attachment.update({ where: { id }, data: { deletedAt: new Date(), deletedById: userId } });
-      if (attachment.category === "IMAGE_COMPLETED" && attachment.imageTaskId && attachment.imageTask?.completedAttachmentUrl === `/api/attachments/${id}/download`) {
-        await tx.imageTask.update({ where: { id: attachment.imageTaskId }, data: { completedAttachmentUrl: null } });
+      if (attachment.category === "IMAGE_COMPLETED" && attachment.imageTaskId) {
+        const previousAttachment = await tx.attachment.findFirst({
+          where: { imageTaskId: attachment.imageTaskId, category: "IMAGE_COMPLETED", deletedAt: null, id: { not: id } },
+          orderBy: [{ uploadedAt: "desc" }, { id: "desc" }],
+        });
+        const restoredPointer = await tx.imageTask.updateMany({
+          where: {
+            id: attachment.imageTaskId,
+            designerId: userId,
+            status: { in: DESIGNER_COMPLETED_ATTACHMENT_STATUSES },
+            completedAttachmentUrl: currentCompletedAttachmentUrl,
+            deletedAt: null,
+          },
+          data: { completedAttachmentUrl: previousAttachment ? `/api/attachments/${previousAttachment.id}/download` : null },
+        });
+        if (restoredPointer.count !== 1) {
+          throw new ConflictException("Image task status or completed attachment has changed. Refresh and try again.");
+        }
       }
     });
     await this.log.log({ userId, action: "delete_attachment", targetType: "attachment", targetId: id, content: "Delete attachment" });
@@ -163,10 +215,13 @@ export class AttachmentsService {
   }
 
   private canUploadImageTaskAttachment(imageTask: any, category: string, userId: number, userRole: string) {
-    if (ADMIN_ROLES.includes(userRole)) return true;
     if (category === "IMAGE_COMPLETED") {
-      return userRole === "DESIGNER" && imageTask.designerId === userId && DESIGN_VISIBLE_TASK_STATUS.includes(imageTask.task.workflowStatus);
+      return userRole === "DESIGNER"
+        && imageTask.designerId === userId
+        && DESIGN_VISIBLE_TASK_STATUS.includes(imageTask.task.workflowStatus)
+        && DESIGNER_COMPLETED_ATTACHMENT_STATUSES.includes(imageTask.status);
     }
+    if (ADMIN_ROLES.includes(userRole)) return true;
     return userRole === "OPERATION" && imageTask.task.creatorId === userId && EDITABLE_TASK_STATUS.includes(imageTask.task.workflowStatus);
   }
 

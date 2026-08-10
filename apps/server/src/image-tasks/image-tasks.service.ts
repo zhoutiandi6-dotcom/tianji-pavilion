@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
 import { OperationLogService } from "../operation-log/operation-log.service";
 import { EventBus } from "../event-bus/event-bus";
@@ -484,18 +484,36 @@ export class ImageTasksService {
         throw new ForbiddenException("Image task is not visible to designers before operation manager approval");
       }
       const data: any = {};
-      if (dto.status === "IN_PROGRESS" && ["NOT_STARTED", "REVISION_REQUIRED"].includes(imageTask.status)) data.status = "IN_PROGRESS";
-      if (dto.status === "SUBMITTED_FOR_REVIEW" && ["NOT_STARTED", "IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
+      let expectedStatuses: string[] | null = null;
+      if (dto.status === "IN_PROGRESS" && ["NOT_STARTED", "REVISION_REQUIRED"].includes(imageTask.status)) {
+        data.status = "IN_PROGRESS";
+        expectedStatuses = ["NOT_STARTED", "REVISION_REQUIRED"];
+      }
+      if (dto.status === "SUBMITTED_FOR_REVIEW" && ["IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
+        if (!imageTask.attachments.some((attachment: any) => attachment.category === "IMAGE_COMPLETED")) {
+          throw new BadRequestException("At least one completed attachment is required before design review submission");
+        }
         data.status = "SUBMITTED_FOR_REVIEW";
         data.reviewStatus = "PENDING";
         data.submittedAt = new Date();
         data.submittedById = userId;
+        expectedStatuses = ["IN_PROGRESS", "REVISION_REQUIRED"];
       }
       if (dto.designNote !== undefined) data.designNote = dto.designNote;
       if (dto.completedAttachmentUrl !== undefined) data.completedAttachmentUrl = dto.completedAttachmentUrl;
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid image task update");
       const result = await this.prisma.$transaction(async (tx: any) => {
-        const updated = await tx.imageTask.update({ where: { id }, data });
+        if (data.status && expectedStatuses) {
+          const transition = await tx.imageTask.updateMany({
+            where: { id, designerId: userId, status: { in: expectedStatuses }, deletedAt: null },
+            data,
+          });
+          if (transition.count !== 1) {
+            throw new ConflictException("Image task status has changed. Refresh and try again.");
+          }
+        } else {
+          await tx.imageTask.update({ where: { id }, data });
+        }
         if (data.status === "IN_PROGRESS" || data.status === "SUBMITTED_FOR_REVIEW") {
           await this.workflowEngine.recalcTaskStatusInTransaction(tx, imageTask.taskId);
         }
@@ -510,7 +528,7 @@ export class ImageTasksService {
             },
           });
         }
-        return updated;
+        return tx.imageTask.findUnique({ where: { id } });
       });
       if (data.status === "IN_PROGRESS") {
         await this.eventBus.publish("image_task.started", new ImageTaskStarted(id, imageTask.taskId, userId));
