@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Descriptions, Image, Modal, Spin, Typography, message } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, FileImageOutlined } from '@ant-design/icons';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { attachmentApi, getErrorMessage, imageTaskApi, type ImageTaskDetail, type ImageTaskDetailAttachment } from '@/lib/api';
+import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDetail, type ImageTaskDetailAttachment } from '@/lib/api';
 import { formatShanghaiDateTime } from '@/lib/shanghai-week';
 import { useDashboardRefresh } from '@/hooks/useDashboardRefresh';
 import { DetailSection, SecondaryEmptyState, SecondaryErrorState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from '@/components/secondary-page';
@@ -49,7 +49,10 @@ export default function ImageTaskDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id: number; role: string } | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
   const hasDetailRef = useRef(false);
+  const actionRunningRef = useRef(false);
 
   const loadDetail = useCallback(async (showLoading = false) => {
     if (!Number.isInteger(taskId) || taskId <= 0) {
@@ -83,6 +86,20 @@ export default function ImageTaskDetailPage() {
   useEffect(() => {
     void loadDetail(true);
   }, [loadDetail]);
+
+  useEffect(() => {
+    let active = true;
+    void authApi.getMe()
+      .then((response) => {
+        if (!active) return;
+        const payload = response.data?.data || response.data;
+        setCurrentUser({ id: Number(payload.id), role: String(payload.role || '') });
+      })
+      .catch(() => {
+        if (active) setCurrentUser(null);
+      });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => () => {
     if (preview?.url) window.URL.revokeObjectURL(preview.url);
@@ -177,6 +194,30 @@ export default function ImageTaskDetailPage() {
 
   const originalAttachments = detail.sourceAttachments.filter((attachment) => attachment.category === 'IMAGE_ORIGINAL');
   const referenceAttachments = detail.sourceAttachments.filter((attachment) => attachment.category === 'IMAGE_REFERENCE');
+  const isAssignedDesigner = currentUser?.role === 'DESIGNER' && detail.people.designer?.id === currentUser.id;
+  const isDesignerActionStatus = ['NOT_STARTED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'SUBMITTED_FOR_REVIEW', 'APPROVED', 'COMPLETED'].includes(detail.status);
+  const canStartDesign = isAssignedDesigner && detail.status === 'NOT_STARTED';
+  const latestRevisionReason = [...detail.reviewHistory]
+    .reverse()
+    .find((record) => ['design_review_rejected', 'design_review_reject'].includes(record.action) && record.reason?.trim())
+    ?.reason?.trim();
+
+  const startDesign = async () => {
+    if (!canStartDesign || actionRunningRef.current) return;
+    actionRunningRef.current = true;
+    setActionLoading(true);
+    try {
+      await imageTaskApi.start(taskId);
+      await loadDetail(false);
+      window.dispatchEvent(new Event('tianji:dashboard-refresh'));
+      message.success('已开始设计');
+    } catch (requestError) {
+      message.error(getErrorMessage(requestError, '开始设计失败，请稍后重试'));
+    } finally {
+      actionRunningRef.current = false;
+      setActionLoading(false);
+    }
+  };
 
   return (
     <SecondaryPageShell>
@@ -189,6 +230,35 @@ export default function ImageTaskDetailPage() {
       />
 
       {error ? <div className={styles.refreshWarning}><Text type="warning">{error}，当前展示上一次成功加载的数据。</Text></div> : null}
+
+      {isAssignedDesigner && isDesignerActionStatus ? (
+        <DetailSection title="设计操作">
+          <div className={styles.designerActionPanel}>
+            <div className={styles.designerActionCopy}>
+              <SecondaryStatusTag status={detail.status} />
+              {detail.status === 'NOT_STARTED' ? <p>任务已分配，可开始设计。</p> : null}
+              {detail.status === 'IN_PROGRESS' ? <p>任务正在制作中。</p> : null}
+              {detail.status === 'REVISION_REQUIRED' ? (
+                <>
+                  <p>请根据退回意见修改完成稿后重新提交。</p>
+                  <div className={styles.revisionReason}>
+                    <span>退回原因</span>
+                    <strong>{latestRevisionReason || '暂无可展示的退回原因'}</strong>
+                  </div>
+                </>
+              ) : null}
+              {detail.status === 'SUBMITTED_FOR_REVIEW' ? <p>已提交审核，请等待设计主管处理。</p> : null}
+              {detail.status === 'APPROVED' ? <p>审核已通过，当前任务为只读状态。</p> : null}
+              {detail.status === 'COMPLETED' ? <p>任务已完成，当前任务为只读状态。</p> : null}
+            </div>
+            {canStartDesign ? (
+              <Button type="primary" loading={actionLoading} disabled={actionLoading} onClick={() => void startDesign()}>
+                开始设计
+              </Button>
+            ) : null}
+          </div>
+        </DetailSection>
+      ) : null}
 
       <DetailSection title="当前任务摘要">
         <Descriptions className={styles.summaryGrid} bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }}>

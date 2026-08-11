@@ -18,6 +18,53 @@
   margin: -4px 0 16px;
 }
 
+.designerActionPanel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dfe5ed;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.designerActionCopy {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.designerActionCopy p {
+  margin: 0;
+  color: #555;
+  line-height: 1.65;
+}
+
+.revisionReason {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid #d89614;
+  border-radius: 0 5px 5px 0;
+  background: #fffaf0;
+}
+
+.revisionReason span {
+  color: #8d640f;
+  font-size: 12px;
+}
+
+.revisionReason strong {
+  color: #5f490f;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .summaryGrid :global(.ant-descriptions-view) {
   overflow: hidden;
   border-color: #e4e5e2;
@@ -198,6 +245,11 @@
 }
 
 @media (max-width: 640px) {
+  .designerActionPanel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .attachmentCard {
     grid-template-columns: 34px minmax(0, 1fr);
   }
