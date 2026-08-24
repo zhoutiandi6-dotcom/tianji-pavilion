@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Descriptions, Image, Modal, Spin, Typography, message } from 'antd';
-import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, FileImageOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, FileImageOutlined, UploadOutlined } from '@ant-design/icons';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDetail, type ImageTaskDetailAttachment } from '@/lib/api';
 import { formatShanghaiDateTime } from '@/lib/shanghai-week';
@@ -51,8 +51,11 @@ export default function ImageTaskDetailPage() {
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<{ id: number; role: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState(false);
   const hasDetailRef = useRef(false);
   const actionRunningRef = useRef(false);
+  const uploadRunningRef = useRef(false);
+  const completedArtworkInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadDetail = useCallback(async (showLoading = false) => {
     if (!Number.isInteger(taskId) || taskId <= 0) {
@@ -197,6 +200,8 @@ export default function ImageTaskDetailPage() {
   const isAssignedDesigner = currentUser?.role === 'DESIGNER' && detail.people.designer?.id === currentUser.id;
   const isDesignerActionStatus = ['NOT_STARTED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'SUBMITTED_FOR_REVIEW', 'APPROVED', 'COMPLETED'].includes(detail.status);
   const canStartDesign = isAssignedDesigner && detail.status === 'NOT_STARTED';
+  const canUploadCompletedArtwork = isAssignedDesigner && ['IN_PROGRESS', 'REVISION_REQUIRED'].includes(detail.status);
+  const currentCompletedAttachment = detail.completedAttachments[0] || null;
   const latestRevisionReason = [...detail.reviewHistory]
     .reverse()
     .find((record) => ['design_review_rejected', 'design_review_reject'].includes(record.action) && record.reason?.trim())
@@ -216,6 +221,24 @@ export default function ImageTaskDetailPage() {
     } finally {
       actionRunningRef.current = false;
       setActionLoading(false);
+    }
+  };
+
+  const uploadCompletedArtwork = async (file: File | null) => {
+    if (!file || !canUploadCompletedArtwork || uploadRunningRef.current) return;
+    uploadRunningRef.current = true;
+    setUploadLoading(true);
+    try {
+      await attachmentApi.uploadImageTask(taskId, 'IMAGE_COMPLETED', file);
+      await loadDetail(false);
+      window.dispatchEvent(new Event('tianji:dashboard-refresh'));
+      message.success('完成稿已上传');
+    } catch (requestError) {
+      message.error(getErrorMessage(requestError, '完成稿上传失败，请稍后重试'));
+    } finally {
+      if (completedArtworkInputRef.current) completedArtworkInputRef.current.value = '';
+      uploadRunningRef.current = false;
+      setUploadLoading(false);
     }
   };
 
@@ -251,11 +274,33 @@ export default function ImageTaskDetailPage() {
               {detail.status === 'APPROVED' ? <p>审核已通过，当前任务为只读状态。</p> : null}
               {detail.status === 'COMPLETED' ? <p>任务已完成，当前任务为只读状态。</p> : null}
             </div>
-            {canStartDesign ? (
-              <Button type="primary" loading={actionLoading} disabled={actionLoading} onClick={() => void startDesign()}>
-                开始设计
-              </Button>
-            ) : null}
+            <div className={styles.designerActionControls}>
+              {canStartDesign ? (
+                <Button type="primary" loading={actionLoading} disabled={actionLoading} onClick={() => void startDesign()}>
+                  开始设计
+                </Button>
+              ) : null}
+              {canUploadCompletedArtwork ? (
+                <>
+                  <input
+                    ref={completedArtworkInputRef}
+                    className={styles.hiddenUploadInput}
+                    type="file"
+                    disabled={uploadLoading}
+                    onChange={(event) => void uploadCompletedArtwork(event.target.files?.[0] || null)}
+                  />
+                  <Button
+                    type="primary"
+                    icon={<UploadOutlined />}
+                    loading={uploadLoading}
+                    disabled={uploadLoading}
+                    onClick={() => completedArtworkInputRef.current?.click()}
+                  >
+                    {detail.status === 'REVISION_REQUIRED' || currentCompletedAttachment ? '上传新版完成稿' : '上传完成稿'}
+                  </Button>
+                </>
+              ) : null}
+            </div>
           </div>
         </DetailSection>
       ) : null}
@@ -290,7 +335,10 @@ export default function ImageTaskDetailPage() {
       </DetailSection>
 
       <DetailSection title="设计完成稿">
-        {attachmentList(detail.completedAttachments, '暂未上传完成稿')}
+        {attachmentList(currentCompletedAttachment ? [currentCompletedAttachment] : [], '暂未上传完成稿')}
+        {detail.completedAttachments.length > 1 ? (
+          <p className={styles.completedArtworkMeta}>历史版本：{detail.completedAttachments.length - 1} 个，系统已保留。</p>
+        ) : null}
       </DetailSection>
 
       <DetailSection title="审核记录">
