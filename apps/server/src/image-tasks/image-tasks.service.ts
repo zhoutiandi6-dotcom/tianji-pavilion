@@ -15,6 +15,7 @@ import { UpdateImageTaskDto } from "./dto/update-image-task.dto";
 import { BatchAssignImageTasksDto } from "./dto/batch-assign-image-tasks.dto";
 import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
+import { IMAGE_TASK_REVIEW_HISTORY_ACTIONS } from "./image-task-review-history";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
 import {
@@ -165,43 +166,15 @@ export class ImageTasksService {
     if (!this.canViewTask(imageTask.task, userId, userRole)) throw new ForbiddenException("No permission to view image task");
     if (userRole === "DESIGNER" && imageTask.designerId !== userId) throw new ForbiddenException("No permission to view image task");
 
-    const reviewAuditActions = [
-      "design_review_submitted",
-      "design_review_resubmitted",
-      "design_review_rejected",
-      "design_review_approved",
-    ];
-    const reviewOperationActions = [
-      "submit_design_review",
-      "resubmit_design_review",
-      "design_review_reject",
-      "design_review_approve",
-    ];
-    const [auditEvents, operationLogs] = await Promise.all([
-      this.prisma.auditEvent.findMany({
-        where: {
-          resourceType: "image_task",
-          resourceId: id,
-          action: { in: reviewAuditActions },
-        },
-        select: { action: true, operatorId: true, metadata: true, createdAt: true },
-        orderBy: { createdAt: "asc" },
-      }),
-      this.prisma.operationLog.findMany({
-        where: {
-          targetType: "image_task",
-          targetId: id,
-          action: { in: reviewOperationActions },
-        },
-        select: {
-          action: true,
-          afterValue: true,
-          createdAt: true,
-          user: { select: { id: true, username: true, displayName: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      }),
-    ]);
+    const auditEvents = await this.prisma.auditEvent.findMany({
+      where: {
+        resourceType: "image_task",
+        resourceId: id,
+        action: { in: IMAGE_TASK_REVIEW_HISTORY_ACTIONS },
+      },
+      select: { action: true, operatorId: true, metadata: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    });
 
     const actorIds = Array.from(new Set(auditEvents
       .map((event) => event.operatorId)
@@ -253,13 +226,6 @@ export class ImageTasksService {
         operator: toPerson(actorById.get(event.operatorId ?? -1) || null),
         reason: readReason(event.metadata),
         createdAt: event.createdAt,
-      })),
-      ...operationLogs.map((log) => ({
-        source: "OPERATION_LOG" as const,
-        action: log.action,
-        operator: toPerson(log.user),
-        reason: readReason(log.afterValue),
-        createdAt: log.createdAt,
       })),
     ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
 
@@ -603,8 +569,23 @@ export class ImageTasksService {
         data.approvedById = dto.status === "APPROVED" ? userId : null;
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
+      const isReviewDecision = data.status === "APPROVED" || data.status === "REVISION_REQUIRED";
       const result = await this.prisma.$transaction(async (tx: any) => {
-        const updated = await tx.imageTask.update({ where: { id }, data });
+        let updated: any;
+        if (isReviewDecision) {
+          const transition = await tx.imageTask.updateMany({
+            where: { id, status: "SUBMITTED_FOR_REVIEW", deletedAt: null },
+            data,
+          });
+          if (transition.count !== 1) {
+            const current = await tx.imageTask.findUnique({ where: { id }, select: { status: true } });
+            if (!current) throw new NotFoundException("Image task not found");
+            throw new ConflictException(`Image task review status has changed to ${current.status}. Refresh and try again.`);
+          }
+          updated = await tx.imageTask.findUnique({ where: { id } });
+        } else {
+          updated = await tx.imageTask.update({ where: { id }, data });
+        }
         if (assignmentType && assignedAt && dto.designerId !== undefined) {
           await this.createAssignmentAudit(tx, imageTask, Number(dto.designerId), userId, assignedAt, assignmentType);
           await this.weeklyPlans.addAssignedTasksInTransaction(tx, [imageTask], Number(dto.designerId), userId, assignedAt, assignmentType, dto.weekStart);
@@ -634,13 +615,6 @@ export class ImageTasksService {
       }
       if (data.status && data.status !== imageTask.status) {
         await this.log.log({ userId, action: "update_image_task_status", targetType: "image_task", targetId: id, content: `Image task status changed: ${imageTask.status} -> ${data.status}` });
-        await this.log.log({
-          userId,
-          action: data.status === "APPROVED" ? "design_review_approve" : "design_review_reject",
-          targetType: "image_task",
-          targetId: id,
-          content: data.status === "APPROVED" ? `Approve design review: ${imageTask.imageTitle || `#${imageTask.imageIndex}`}` : `Reject design review: ${imageTask.imageTitle || `#${imageTask.imageIndex}`}`,
-        });
         const event = data.status === "APPROVED"
           ? new ImageTaskReviewApproved(id, imageTask.taskId, userId, imageTask.designerId, imageTask.imageTitle || undefined)
           : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined);

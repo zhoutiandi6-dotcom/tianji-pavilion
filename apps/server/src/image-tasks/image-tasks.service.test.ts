@@ -91,8 +91,8 @@ describe("ImageTasksService stage A audit writes", () => {
 
     await service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER");
 
-    expect(prisma.imageTask.update).toHaveBeenCalledWith({
-      where: { id: 1 },
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, status: "SUBMITTED_FOR_REVIEW", deletedAt: null },
       data: expect.objectContaining({
         status: "APPROVED",
         approvedAt: expect.any(Date),
@@ -116,8 +116,8 @@ describe("ImageTasksService stage A audit writes", () => {
 
     await service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "Revise" } as any, 9, "DESIGN_MANAGER");
 
-    expect(prisma.imageTask.update).toHaveBeenCalledWith({
-      where: { id: 1 },
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, status: "SUBMITTED_FOR_REVIEW", deletedAt: null },
       data: expect.objectContaining({
         status: "REVISION_REQUIRED",
         approvedAt: null,
@@ -125,6 +125,147 @@ describe("ImageTasksService stage A audit writes", () => {
       }),
     });
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each(["IN_PROGRESS", "REVISION_REQUIRED", "APPROVED", "COMPLETED"])("rejects %s manager approval before writing review side effects", async (status) => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status,
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+
+    await expect(service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"))
+      .rejects.toThrow("Only submitted image tasks can be reviewed");
+
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
+    expect(workflowEngine.recalcTaskStatusInTransaction).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("rejects a blank review remark before changing the task", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+
+    await expect(service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "  " } as any, 9, "DESIGN_MANAGER"))
+      .rejects.toThrow("请填写退回原因");
+
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it.each(["DESIGNER", "OPERATION", "OPERATION_MANAGER"])("keeps %s forbidden from manager review", async (role) => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+
+    await expect(service.update(1, { status: "APPROVED" } as any, role === "DESIGNER" ? 7 : 2, role))
+      .rejects.toThrow();
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(["DESIGN_MANAGER", "OWNER", "SUPER_ADMIN"])("allows %s to approve a submitted review", async (role) => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+
+    await expect(service.update(1, { status: "APPROVED" } as any, 9, role)).resolves.toBeDefined();
+    expect(prisma.imageTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 1, status: "SUBMITTED_FOR_REVIEW", deletedAt: null },
+    }));
+  });
+
+  it("allows only one concurrent approve transition and its review side effects", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+    let persistedStatus = "SUBMITTED_FOR_REVIEW";
+    prisma.imageTask.updateMany.mockImplementation(({ where, data }: any) => {
+      if (persistedStatus !== where.status) return { count: 0 };
+      persistedStatus = data.status;
+      return { count: 1 };
+    });
+
+    const results = await Promise.allSettled([
+      service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"),
+      service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(persistedStatus).toBe("APPROVED");
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes concurrent approve and reject mutually exclusive", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+    let persistedStatus = "SUBMITTED_FOR_REVIEW";
+    prisma.imageTask.updateMany.mockImplementation(({ where, data }: any) => {
+      if (persistedStatus !== where.status) return { count: 0 };
+      persistedStatus = data.status;
+      return { count: 1 };
+    });
+
+    const results = await Promise.allSettled([
+      service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"),
+      service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "Please revise" } as any, 9, "DESIGN_MANAGER"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(["APPROVED", "REVISION_REQUIRED"]).toContain(persistedStatus);
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows only one concurrent reject transition and its review side effects", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+    let persistedStatus = "SUBMITTED_FOR_REVIEW";
+    prisma.imageTask.updateMany.mockImplementation(({ where, data }: any) => {
+      if (persistedStatus !== where.status) return { count: 0 };
+      persistedStatus = data.status;
+      return { count: 1 };
+    });
+
+    const results = await Promise.allSettled([
+      service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "Please revise" } as any, 9, "DESIGN_MANAGER"),
+      service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "Please revise" } as any, 9, "DESIGN_MANAGER"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(persistedStatus).toBe("REVISION_REQUIRED");
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
+    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
   });
 
   it("submits a designer task atomically into pending design review with submission audit fields", async () => {
@@ -409,16 +550,29 @@ describe("ImageTasksService stage A audit writes", () => {
         metadata: JSON.stringify({ reason: "Ready for review" }),
         createdAt: new Date("2026-08-10T03:00:00.000Z"),
       },
-    ]);
-    prisma.operationLog.findMany.mockResolvedValue([
       {
-        action: "design_review_reject",
-        afterValue: JSON.stringify({ reviewRemark: "Improve the logo" }),
+        action: "review_reject",
+        operatorId: 8,
+        metadata: JSON.stringify({ remark: "Improve the logo" }),
         createdAt: new Date("2026-08-10T04:00:00.000Z"),
-        user: { id: 8, username: "manager", displayName: "Design Manager" },
+      },
+      {
+        action: "design_review_resubmitted",
+        operatorId: 7,
+        metadata: JSON.stringify({ reason: "Updated artwork" }),
+        createdAt: new Date("2026-08-10T05:00:00.000Z"),
+      },
+      {
+        action: "review_approve",
+        operatorId: 8,
+        metadata: JSON.stringify({}),
+        createdAt: new Date("2026-08-10T06:00:00.000Z"),
       },
     ]);
-    prisma.user.findMany.mockResolvedValue([{ id: 7, username: "designer", displayName: "Designer" }]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 7, username: "designer", displayName: "Designer" },
+      { id: 8, username: "manager", displayName: "Design Manager" },
+    ]);
 
     const result = await service.findOne(1, 7, "DESIGNER");
 
@@ -435,16 +589,16 @@ describe("ImageTasksService stage A audit writes", () => {
       completedAttachments: [{ id: 21, fileName: "completed.png", category: "IMAGE_COMPLETED" }],
       reviewHistory: expect.arrayContaining([
         expect.objectContaining({ action: "design_review_submitted", reason: "Ready for review" }),
-        expect.objectContaining({ action: "design_review_reject", reason: "Improve the logo" }),
+        expect.objectContaining({ action: "review_reject", reason: "Improve the logo" }),
+        expect.objectContaining({ action: "design_review_resubmitted", reason: "Updated artwork" }),
+        expect.objectContaining({ action: "review_approve" }),
       ]),
     });
     expect(JSON.stringify(result)).not.toMatch(/storagePath|password|token|cookie|email/i);
     expect(prisma.auditEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ resourceType: "image_task", resourceId: 1 }),
     }));
-    expect(prisma.operationLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ targetType: "image_task", targetId: 1 }),
-    }));
+    expect(prisma.operationLog.findMany).not.toHaveBeenCalled();
     expect(prisma.workflowHistory).toBeUndefined();
   });
 

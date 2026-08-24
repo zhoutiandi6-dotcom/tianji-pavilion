@@ -13,7 +13,7 @@ export type ImageTaskDetailAttachmentDto = {
 };
 
 export type ImageTaskReviewHistoryItemDto = {
-  source: "AUDIT_EVENT" | "OPERATION_LOG";
+  source: "AUDIT_EVENT";
   action: string;
   operator: ImageTaskDetailPersonDto | null;
   reason: string | null;
