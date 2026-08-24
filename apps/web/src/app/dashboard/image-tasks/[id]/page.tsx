@@ -52,9 +52,11 @@ export default function ImageTaskDetailPage() {
   const [currentUser, setCurrentUser] = useState<{ id: number; role: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [submitLoading, setSubmitLoading] = useState(false);
   const hasDetailRef = useRef(false);
   const actionRunningRef = useRef(false);
   const uploadRunningRef = useRef(false);
+  const submitRunningRef = useRef(false);
   const completedArtworkInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadDetail = useCallback(async (showLoading = false) => {
@@ -202,6 +204,9 @@ export default function ImageTaskDetailPage() {
   const canStartDesign = isAssignedDesigner && detail.status === 'NOT_STARTED';
   const canUploadCompletedArtwork = isAssignedDesigner && ['IN_PROGRESS', 'REVISION_REQUIRED'].includes(detail.status);
   const currentCompletedAttachment = detail.completedAttachments[0] || null;
+  const canSubmitReview = isAssignedDesigner
+    && ['IN_PROGRESS', 'REVISION_REQUIRED'].includes(detail.status)
+    && Boolean(currentCompletedAttachment);
   const latestRevisionReason = [...detail.reviewHistory]
     .reverse()
     .find((record) => ['design_review_rejected', 'design_review_reject'].includes(record.action) && record.reason?.trim())
@@ -242,6 +247,23 @@ export default function ImageTaskDetailPage() {
     }
   };
 
+  const submitReview = async () => {
+    if (!canSubmitReview || submitRunningRef.current) return;
+    submitRunningRef.current = true;
+    setSubmitLoading(true);
+    try {
+      await imageTaskApi.submitReview(taskId);
+      await loadDetail(false);
+      window.dispatchEvent(new Event('tianji:dashboard-refresh'));
+      message.success(detail.status === 'REVISION_REQUIRED' ? '已重新提交设计主管审核' : '已提交设计主管审核');
+    } catch (requestError) {
+      message.error(getErrorMessage(requestError, '提交审核失败，请稍后重试'));
+    } finally {
+      submitRunningRef.current = false;
+      setSubmitLoading(false);
+    }
+  };
+
   return (
     <SecondaryPageShell>
       <SecondaryPageHeader
@@ -273,6 +295,9 @@ export default function ImageTaskDetailPage() {
               {detail.status === 'SUBMITTED_FOR_REVIEW' ? <p>已提交审核，请等待设计主管处理。</p> : null}
               {detail.status === 'APPROVED' ? <p>审核已通过，当前任务为只读状态。</p> : null}
               {detail.status === 'COMPLETED' ? <p>任务已完成，当前任务为只读状态。</p> : null}
+              {isAssignedDesigner && ['IN_PROGRESS', 'REVISION_REQUIRED'].includes(detail.status) && !currentCompletedAttachment ? (
+                <p className={styles.submitHint}>请先上传完成稿后再提交审核</p>
+              ) : null}
             </div>
             <div className={styles.designerActionControls}>
               {canStartDesign ? (
@@ -286,19 +311,29 @@ export default function ImageTaskDetailPage() {
                     ref={completedArtworkInputRef}
                     className={styles.hiddenUploadInput}
                     type="file"
-                    disabled={uploadLoading}
+                    disabled={uploadLoading || submitLoading}
                     onChange={(event) => void uploadCompletedArtwork(event.target.files?.[0] || null)}
                   />
                   <Button
                     type="primary"
                     icon={<UploadOutlined />}
                     loading={uploadLoading}
-                    disabled={uploadLoading}
+                    disabled={uploadLoading || submitLoading}
                     onClick={() => completedArtworkInputRef.current?.click()}
                   >
                     {detail.status === 'REVISION_REQUIRED' || currentCompletedAttachment ? '上传新版完成稿' : '上传完成稿'}
                   </Button>
                 </>
+              ) : null}
+              {canSubmitReview ? (
+                <Button
+                  type="primary"
+                  loading={submitLoading}
+                  disabled={submitLoading || uploadLoading}
+                  onClick={() => void submitReview()}
+                >
+                  {detail.status === 'REVISION_REQUIRED' ? '重新提交审核' : '提交审核'}
+                </Button>
               ) : null}
             </div>
           </div>
