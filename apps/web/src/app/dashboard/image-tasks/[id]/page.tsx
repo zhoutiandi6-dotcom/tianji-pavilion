@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Descriptions, Image, Modal, Spin, Typography, message } from 'antd';
+import { Button, Descriptions, Image, Input, Modal, Spin, Typography, message } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, FileImageOutlined, UploadOutlined } from '@ant-design/icons';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDetail, type ImageTaskDetailAttachment } from '@/lib/api';
@@ -21,7 +21,17 @@ const reviewActionLabels: Record<string, string> = {
   resubmit_design_review: '重新提交设计主管审核',
   design_review_reject: '退回修改',
   design_review_approve: '审核通过',
+  review_reject: '退回修改',
+  review_approve: '审核通过',
 };
+
+const reviewSubmissionActions = new Set([
+  'design_review_submitted',
+  'design_review_resubmitted',
+  'submit_design_review',
+  'resubmit_design_review',
+  'submit_review',
+]);
 
 function isImageAttachment(attachment: ImageTaskDetailAttachment) {
   return attachment.mimeType.toLowerCase().startsWith('image/');
@@ -53,10 +63,14 @@ export default function ImageTaskDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectRemark, setRejectRemark] = useState('');
+  const [rejectLoading, setRejectLoading] = useState(false);
   const hasDetailRef = useRef(false);
   const actionRunningRef = useRef(false);
   const uploadRunningRef = useRef(false);
   const submitRunningRef = useRef(false);
+  const rejectRunningRef = useRef(false);
   const completedArtworkInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadDetail = useCallback(async (showLoading = false) => {
@@ -207,9 +221,19 @@ export default function ImageTaskDetailPage() {
   const canSubmitReview = isAssignedDesigner
     && ['IN_PROGRESS', 'REVISION_REQUIRED'].includes(detail.status)
     && Boolean(currentCompletedAttachment);
+  const canReviewImageTask = ['DESIGN_MANAGER', 'OWNER', 'SUPER_ADMIN'].includes(currentUser?.role || '')
+    && detail.status === 'SUBMITTED_FOR_REVIEW';
+  const latestSubmissionWithAttachment = [...detail.reviewHistory]
+    .reverse()
+    .find((record) => reviewSubmissionActions.has(record.action) && Number.isInteger(record.submittedAttachmentId));
+  const submittedAttachment = latestSubmissionWithAttachment?.submittedAttachmentId
+    ? detail.completedAttachments.find((attachment) => attachment.id === latestSubmissionWithAttachment.submittedAttachmentId) || null
+    : null;
+  const currentReviewAttachment = submittedAttachment || currentCompletedAttachment;
+  const usesLegacyReviewAttachmentFallback = Boolean(currentReviewAttachment && !submittedAttachment);
   const latestRevisionReason = [...detail.reviewHistory]
     .reverse()
-    .find((record) => ['design_review_rejected', 'design_review_reject'].includes(record.action) && record.reason?.trim())
+    .find((record) => ['design_review_rejected', 'design_review_reject', 'review_reject'].includes(record.action) && record.reason?.trim())
     ?.reason?.trim();
 
   const startDesign = async () => {
@@ -264,6 +288,31 @@ export default function ImageTaskDetailPage() {
     }
   };
 
+  const rejectReview = async () => {
+    const remark = rejectRemark.trim();
+    if (!canReviewImageTask || rejectRunningRef.current) return;
+    if (!remark) {
+      message.warning('请填写退回原因');
+      return;
+    }
+
+    rejectRunningRef.current = true;
+    setRejectLoading(true);
+    try {
+      await imageTaskApi.rejectReview(taskId, remark);
+      await loadDetail(false);
+      window.dispatchEvent(new Event('tianji:dashboard-refresh'));
+      setRejectModalOpen(false);
+      setRejectRemark('');
+      message.success('已退回修改');
+    } catch (requestError) {
+      message.error(getErrorMessage(requestError, '退回修改失败，请稍后重试'));
+    } finally {
+      rejectRunningRef.current = false;
+      setRejectLoading(false);
+    }
+  };
+
   return (
     <SecondaryPageShell>
       <SecondaryPageHeader
@@ -275,6 +324,35 @@ export default function ImageTaskDetailPage() {
       />
 
       {error ? <div className={styles.refreshWarning}><Text type="warning">{error}，当前展示上一次成功加载的数据。</Text></div> : null}
+
+      {canReviewImageTask ? (
+        <DetailSection title="设计主管审核">
+          <div className={styles.reviewActionPanel}>
+            <div className={styles.reviewActionCopy}>
+              <SecondaryStatusTag status={detail.status} />
+              <p>请确认当前提交版本后处理。</p>
+              {currentReviewAttachment ? (
+                <div className={styles.reviewedArtwork}>
+                  <div className={styles.reviewedArtworkMeta}>
+                    <span>当前审核版本</span>
+                    <strong>附件 #{currentReviewAttachment.id} · {currentReviewAttachment.fileName}</strong>
+                    <small>{formatShanghaiDateTime(currentReviewAttachment.createdAt) || '-'}{usesLegacyReviewAttachmentFallback ? ' · 历史提交未记录版本 ID，按当前完成稿展示' : ' · 已按提交记录绑定'}</small>
+                  </div>
+                  <div className={styles.attachmentActions}>
+                    {isImageAttachment(currentReviewAttachment) ? <Button size="small" icon={<EyeOutlined />} onClick={() => void previewAttachment(currentReviewAttachment)}>预览</Button> : null}
+                    <Button size="small" icon={<DownloadOutlined />} onClick={() => void downloadAttachment(currentReviewAttachment)}>下载</Button>
+                  </div>
+                </div>
+              ) : <SecondaryEmptyState description="当前提交版本暂时无法确认" />}
+            </div>
+            <div className={styles.designerActionControls}>
+              <Button danger type="primary" loading={rejectLoading} disabled={rejectLoading} onClick={() => setRejectModalOpen(true)}>
+                退回修改
+              </Button>
+            </div>
+          </div>
+        </DetailSection>
+      ) : null}
 
       {isAssignedDesigner && isDesignerActionStatus ? (
         <DetailSection title="设计操作">
@@ -392,6 +470,32 @@ export default function ImageTaskDetailPage() {
 
       <Modal open={Boolean(preview)} title={preview?.title || '附件预览'} footer={null} onCancel={() => setPreview(null)} width={900}>
         {preview?.url ? <Image src={preview.url} alt={preview.title} preview={false} className={styles.previewImage} /> : null}
+      </Modal>
+      <Modal
+        open={rejectModalOpen && canReviewImageTask}
+        title="退回修改"
+        okText="确认退回"
+        cancelText="取消"
+        confirmLoading={rejectLoading}
+        okButtonProps={{ danger: true, disabled: rejectLoading || !rejectRemark.trim() }}
+        cancelButtonProps={{ disabled: rejectLoading }}
+        maskClosable={!rejectLoading}
+        closable={!rejectLoading}
+        onCancel={() => {
+          if (rejectLoading) return;
+          setRejectModalOpen(false);
+          setRejectRemark('');
+        }}
+        onOk={() => void rejectReview()}
+      >
+        <p className={styles.reviewDialogHint}>退回后，设计师可上传新版完成稿并重新提交审核。</p>
+        <Input.TextArea
+          value={rejectRemark}
+          rows={5}
+          placeholder="请填写退回原因"
+          disabled={rejectLoading}
+          onChange={(event) => setRejectRemark(event.target.value)}
+        />
       </Modal>
     </SecondaryPageShell>
   );

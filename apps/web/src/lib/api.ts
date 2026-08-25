@@ -169,6 +169,8 @@ export type ImageTaskReviewHistoryItem = {
   operator: { id: number; displayName: string } | null;
   reason: string | null;
   createdAt: string;
+  submittedAttachmentId: number | null;
+  reviewedAttachmentId: number | null;
 };
 
 export const imageTaskApi = {
