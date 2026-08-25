@@ -261,6 +261,7 @@ describe("WorkflowEngine", () => {
     });
 
     it("returns DESIGN_APPROVED when all image tasks completed", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "DESIGN_REVIEW" });
       prisma.imageTask.findMany.mockResolvedValue([
         { status: "COMPLETED" }, { status: "COMPLETED" },
       ]);
@@ -280,13 +281,60 @@ describe("WorkflowEngine", () => {
     it("updates the parent workflow to DESIGN_REVIEW in the same transaction as a designer submission", async () => {
       const tx = {
         imageTask: { findMany: jest.fn().mockResolvedValue([{ status: "SUBMITTED_FOR_REVIEW" }]) },
-        task: { findUnique: jest.fn().mockResolvedValue({ workflowStatus: "DESIGN_ASSIGNED" }), update: jest.fn().mockResolvedValue({}) },
+        task: { findUnique: jest.fn().mockResolvedValue({ workflowStatus: "DESIGN_ASSIGNED", serialNumber: "T-1" }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       };
 
       const status = await engine.recalcTaskStatusInTransaction(tx, 1);
 
       expect(status).toBe("DESIGN_REVIEW");
-      expect(tx.task.update).toHaveBeenCalledWith({ where: { id: 1 }, data: { workflowStatus: "DESIGN_REVIEW" } });
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 1, workflowStatus: "DESIGN_ASSIGNED", deletedAt: null },
+        data: { workflowStatus: "DESIGN_REVIEW" },
+      });
+    });
+
+    it("publishes completion only when the parent actually enters DESIGN_APPROVED", async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "DESIGN_APPROVED" });
+      prisma.imageTask.findMany.mockResolvedValue([{ status: "APPROVED" }]);
+
+      await engine.recalcTaskStatus(1);
+
+      expect(prisma.task.updateMany).not.toHaveBeenCalled();
+      expect(eventBus.publish).not.toHaveBeenCalled();
+    });
+
+    it("returns IN_DESIGN after a review is rejected while other images remain approved", async () => {
+      const tx = {
+        imageTask: { findMany: jest.fn().mockResolvedValue([{ status: "APPROVED" }, { status: "REVISION_REQUIRED" }]) },
+        task: { findUnique: jest.fn().mockResolvedValue({ workflowStatus: "DESIGN_REVIEW", serialNumber: "T-1" }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      };
+
+      const result = await engine.recalcTaskDesignStatusInTransaction(tx, 1);
+
+      expect(result).toEqual(expect.objectContaining({ previousStatus: "DESIGN_REVIEW", nextStatus: "IN_DESIGN", enteredDesignApproved: false }));
+    });
+
+    it("allows only one concurrent parent transition to enter DESIGN_APPROVED", async () => {
+      let workflowStatus = "DESIGN_REVIEW";
+      const tx = {
+        imageTask: { findMany: jest.fn().mockResolvedValue([{ status: "APPROVED" }, { status: "COMPLETED" }]) },
+        task: {
+          findUnique: jest.fn().mockImplementation(() => ({ workflowStatus, serialNumber: "T-1" })),
+          updateMany: jest.fn().mockImplementation(({ where, data }: any) => {
+            if (where.workflowStatus !== workflowStatus) return { count: 0 };
+            workflowStatus = data.workflowStatus;
+            return { count: 1 };
+          }),
+        },
+      };
+
+      const results = await Promise.all([
+        engine.recalcTaskDesignStatusInTransaction(tx, 1),
+        engine.recalcTaskDesignStatusInTransaction(tx, 1),
+      ]);
+
+      expect(workflowStatus).toBe("DESIGN_APPROVED");
+      expect(results.filter((result) => result.enteredDesignApproved)).toHaveLength(1);
     });
   });
 });

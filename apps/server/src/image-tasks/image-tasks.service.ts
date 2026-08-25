@@ -8,6 +8,7 @@ import {
   ImageTaskReviewRejected,
   ImageTaskStarted,
   ImageTaskSubmittedForReview,
+  WorkflowCompleted,
 } from "../domain-events";
 import { WorkflowEngine } from "../workflow-engine/engine";
 import { CreateImageTaskDto } from "./dto/create-image-task.dto";
@@ -469,7 +470,7 @@ export class ImageTasksService {
     const status = dto.action === "APPROVE" ? "APPROVED" : "REVISION_REQUIRED";
     const approvedAt = dto.action === "APPROVE" ? new Date() : null;
     const reviewedAttachmentIds = new Map<number, number>();
-    await this.prisma.$transaction(async (tx: any) => {
+    const completedTasks = await this.prisma.$transaction(async (tx: any) => {
       for (const item of imageTasks) {
         await tx.imageTask.update({
           where: { id: item.id },
@@ -495,6 +496,11 @@ export class ImageTasksService {
           await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, item.id, userId, approvedAt);
         }
       }
+      const results = await Promise.all(taskIds.map(async (taskId) => ({
+        taskId,
+        result: await this.workflowEngine.recalcTaskDesignStatusInTransaction(tx, taskId),
+      })));
+      return results.filter(({ result }) => result.enteredDesignApproved);
     });
     for (const item of imageTasks) {
       const reviewedAttachmentId = reviewedAttachmentIds.get(item.id);
@@ -502,7 +508,10 @@ export class ImageTasksService {
       const event = dto.action === "APPROVE" ? new ImageTaskReviewApproved(item.id, item.taskId, userId, item.designerId, item.imageTitle || undefined, reviewedAttachmentId) : new ImageTaskReviewRejected(item.id, item.taskId, userId, item.designerId, remark, item.imageTitle || undefined, reviewedAttachmentId);
       await this.eventBus.publish(event.name, event);
     }
-    await Promise.all(taskIds.map((taskId) => this.workflowEngine.recalcTaskStatus(taskId)));
+    for (const { taskId, result } of completedTasks) {
+      const event = new WorkflowCompleted(taskId, result.serialNumber);
+      await this.eventBus.publish(event.name, event);
+    }
     return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
   }
 
@@ -662,7 +671,7 @@ export class ImageTasksService {
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
       const isReviewDecision = data.status === "APPROVED" || data.status === "REVISION_REQUIRED";
       let reviewedAttachmentId: number | null = null;
-      const result = await this.prisma.$transaction(async (tx: any) => {
+      const reviewResult = await this.prisma.$transaction(async (tx: any) => {
         let updated: any;
         if (isReviewDecision) {
           const transition = await tx.imageTask.updateMany({
@@ -695,10 +704,10 @@ export class ImageTasksService {
         if (data.status === "APPROVED" && approvedAt) {
           await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, id, userId, approvedAt);
         }
-        if (data.status === "APPROVED" || data.status === "REVISION_REQUIRED") {
-          await this.workflowEngine.recalcTaskStatusInTransaction(tx, imageTask.taskId);
-        }
-        return updated;
+        const parentStatus = data.status === "APPROVED" || data.status === "REVISION_REQUIRED"
+          ? await this.workflowEngine.recalcTaskDesignStatusInTransaction(tx, imageTask.taskId)
+          : null;
+        return { updated, parentStatus };
       });
       if (dto.designerId && dto.designerId !== imageTask.designerId) {
         await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(id, imageTask.taskId, dto.designerId));
@@ -722,7 +731,11 @@ export class ImageTasksService {
           : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined, reviewedAttachmentId ?? undefined);
         await this.eventBus.publish(event.name, event);
       }
-      return result;
+      if (reviewResult.parentStatus?.enteredDesignApproved) {
+        const event = new WorkflowCompleted(imageTask.taskId, reviewResult.parentStatus.serialNumber);
+        await this.eventBus.publish(event.name, event);
+      }
+      return reviewResult.updated;
     }
 
     if (["OPERATION", "OWNER", "SUPER_ADMIN"].includes(userRole)) {

@@ -69,8 +69,7 @@ export class StateMachine {
     if (!imageStatuses || imageStatuses.length === 0) return TASK_WORKFLOW_STATUS.OPS_APPROVED;
     if (imageStatuses.every(s => s === IMAGE_TASK_STATUS.COMPLETED || s === IMAGE_TASK_STATUS.APPROVED)) return TASK_WORKFLOW_STATUS.DESIGN_APPROVED;
     if (imageStatuses.some(s => s === IMAGE_TASK_STATUS.SUBMITTED_FOR_REVIEW)) return TASK_WORKFLOW_STATUS.DESIGN_REVIEW;
-    if (imageStatuses.some(s => s === IMAGE_TASK_STATUS.IN_PROGRESS || s === IMAGE_TASK_STATUS.REVISION_REQUIRED)) return TASK_WORKFLOW_STATUS.IN_DESIGN;
-    if (imageStatuses.some(s => s === IMAGE_TASK_STATUS.NOT_STARTED)) return TASK_WORKFLOW_STATUS.DESIGN_ASSIGNED;
+    if (imageStatuses.some(s => s === IMAGE_TASK_STATUS.NOT_STARTED || s === IMAGE_TASK_STATUS.IN_PROGRESS || s === IMAGE_TASK_STATUS.REVISION_REQUIRED)) return TASK_WORKFLOW_STATUS.IN_DESIGN;
     return TASK_WORKFLOW_STATUS.OPS_APPROVED;
   }
 }

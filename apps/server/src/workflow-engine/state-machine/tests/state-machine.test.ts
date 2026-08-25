@@ -68,8 +68,8 @@ describe("StateMachine", () => {
       expect(StateMachine.calcTaskWorkflowStatus(["COMPLETED", "REVISION_REQUIRED"])).toBe("IN_DESIGN");
     });
 
-    it("any not started status = DESIGN_ASSIGNED", () => {
-      expect(StateMachine.calcTaskWorkflowStatus(["NOT_STARTED", "NOT_STARTED"])).toBe("DESIGN_ASSIGNED");
+    it("not started work is part of the design stage", () => {
+      expect(StateMachine.calcTaskWorkflowStatus(["NOT_STARTED", "NOT_STARTED"])).toBe("IN_DESIGN");
     });
 
     it("empty array = OPS_APPROVED", () => {

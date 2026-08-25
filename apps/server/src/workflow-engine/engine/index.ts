@@ -15,6 +15,13 @@ export interface WorkflowActionResult {
   event?: InstanceType<any>;
 }
 
+export type TaskDesignStatusRecalculation = {
+  previousStatus: string;
+  nextStatus: string;
+  enteredDesignApproved: boolean;
+  serialNumber: string;
+};
+
 type RejectTaskInput = {
   comment?: string;
   issueImageTaskIds?: number[];
@@ -366,33 +373,48 @@ export class WorkflowEngine {
   }
 
   async recalcTaskStatus(taskId: number): Promise<string> {
-    const imageTasks = await this.prisma.imageTask.findMany({ where: { taskId }, select: { status: true } });
-    const computedStatus = StateMachine.calcTaskWorkflowStatus(imageTasks.map((t: any) => t.status));
-    const task = await this.getTask(taskId);
-    if ([TASK_WORKFLOW_STATUS.OPS_APPROVED, TASK_WORKFLOW_STATUS.DESIGN_ASSIGNED, TASK_WORKFLOW_STATUS.IN_DESIGN, TASK_WORKFLOW_STATUS.DESIGN_REVIEW, TASK_WORKFLOW_STATUS.DESIGN_APPROVED].includes(task.workflowStatus as any)) {
-      if (task.workflowStatus !== computedStatus) {
-        await this.prisma.task.update({ where: { id: taskId }, data: { workflowStatus: computedStatus } });
-        await this.recordLog(0, "update_task_status", "task", taskId, `Task status changed: ${task.workflowStatus} -> ${computedStatus}`);
-      }
-      if (computedStatus === TASK_WORKFLOW_STATUS.DESIGN_APPROVED) {
-        const event = new WorkflowCompleted(taskId, task.serialNumber);
-        await this.eventBus.publish(event.name, event);
-      }
+    const result = await this.prisma.$transaction((tx: any) => this.recalcTaskDesignStatusInTransaction(tx, taskId));
+    if (result.enteredDesignApproved) {
+      const event = new WorkflowCompleted(taskId, result.serialNumber);
+      await this.eventBus.publish(event.name, event);
     }
-    return computedStatus;
+    if (result.previousStatus !== result.nextStatus) {
+      await this.recordLog(0, "update_task_status", "task", taskId, `Task status changed: ${result.previousStatus} -> ${result.nextStatus}`);
+    }
+    return result.nextStatus;
   }
 
-  async recalcTaskStatusInTransaction(tx: any, taskId: number): Promise<string> {
+  async recalcTaskDesignStatusInTransaction(tx: any, taskId: number): Promise<TaskDesignStatusRecalculation> {
     const [imageTasks, task] = await Promise.all([
       tx.imageTask.findMany({ where: { taskId, deletedAt: null }, select: { status: true } }),
-      tx.task.findUnique({ where: { id: taskId }, select: { workflowStatus: true } }),
+      tx.task.findUnique({ where: { id: taskId }, select: { workflowStatus: true, serialNumber: true } }),
     ]);
     if (!task) throw new NotFoundException("Task not found");
     const computedStatus = StateMachine.calcTaskWorkflowStatus(imageTasks.map((item: any) => item.status));
-    if ([TASK_WORKFLOW_STATUS.OPS_APPROVED, TASK_WORKFLOW_STATUS.DESIGN_ASSIGNED, TASK_WORKFLOW_STATUS.IN_DESIGN, TASK_WORKFLOW_STATUS.DESIGN_REVIEW, TASK_WORKFLOW_STATUS.DESIGN_APPROVED].includes(task.workflowStatus as any) && task.workflowStatus !== computedStatus) {
-      await tx.task.update({ where: { id: taskId }, data: { workflowStatus: computedStatus } });
+    const previousStatus = task.workflowStatus;
+    const canRecalculate = [TASK_WORKFLOW_STATUS.OPS_APPROVED, TASK_WORKFLOW_STATUS.DESIGN_ASSIGNED, TASK_WORKFLOW_STATUS.IN_DESIGN, TASK_WORKFLOW_STATUS.DESIGN_REVIEW, TASK_WORKFLOW_STATUS.DESIGN_APPROVED].includes(previousStatus as any);
+    if (!canRecalculate || previousStatus === computedStatus) {
+      return { previousStatus, nextStatus: computedStatus, enteredDesignApproved: false, serialNumber: task.serialNumber };
     }
-    return computedStatus;
+    const transition = await tx.task.updateMany({
+      where: { id: taskId, workflowStatus: previousStatus, deletedAt: null },
+      data: { workflowStatus: computedStatus },
+    });
+    if (transition.count !== 1) {
+      const current = await tx.task.findUnique({ where: { id: taskId }, select: { workflowStatus: true, serialNumber: true } });
+      if (!current) throw new NotFoundException("Task not found");
+      return { previousStatus: current.workflowStatus, nextStatus: current.workflowStatus, enteredDesignApproved: false, serialNumber: current.serialNumber };
+    }
+    return {
+      previousStatus,
+      nextStatus: computedStatus,
+      enteredDesignApproved: previousStatus !== TASK_WORKFLOW_STATUS.DESIGN_APPROVED && computedStatus === TASK_WORKFLOW_STATUS.DESIGN_APPROVED,
+      serialNumber: task.serialNumber,
+    };
+  }
+
+  async recalcTaskStatusInTransaction(tx: any, taskId: number): Promise<string> {
+    return (await this.recalcTaskDesignStatusInTransaction(tx, taskId)).nextStatus;
   }
 
   private async recordLog(userId: number, action: string, targetType: string, targetId: number, content?: string) {

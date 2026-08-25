@@ -60,7 +60,16 @@ describe("ImageTasksService stage A audit writes", () => {
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     log = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
-    workflowEngine = { recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED"), recalcTaskStatusInTransaction: jest.fn().mockResolvedValue("DESIGN_REVIEW") };
+    workflowEngine = {
+      recalcTaskStatus: jest.fn().mockResolvedValue("DESIGN_ASSIGNED"),
+      recalcTaskStatusInTransaction: jest.fn().mockResolvedValue("DESIGN_REVIEW"),
+      recalcTaskDesignStatusInTransaction: jest.fn().mockResolvedValue({
+        previousStatus: "DESIGN_REVIEW",
+        nextStatus: "DESIGN_REVIEW",
+        enteredDesignApproved: false,
+        serialNumber: "TJ-10",
+      }),
+    };
     weeklyPlans = {
       addAssignedTasksInTransaction: jest.fn().mockResolvedValue({ id: 1 }),
       completeApprovedImageTaskInTransaction: jest.fn().mockResolvedValue({ state: "COMPLETED" }),
@@ -224,7 +233,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(persistedStatus).toBe("APPROVED");
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).toHaveBeenCalledTimes(1);
-    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.recalcTaskDesignStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
     expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
@@ -252,7 +261,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(["APPROVED", "REVISION_REQUIRED"]).toContain(persistedStatus);
-    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.recalcTaskDesignStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
     expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
@@ -281,7 +290,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(persistedStatus).toBe("REVISION_REQUIRED");
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
-    expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
+    expect(workflowEngine.recalcTaskDesignStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
     expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
@@ -324,6 +333,12 @@ describe("ImageTasksService stage A audit writes", () => {
     }));
     prisma.auditEvent.findFirst.mockResolvedValue({ metadata: JSON.stringify({ submittedAttachmentId: 41 }) });
     prisma.attachment.findFirst.mockResolvedValue({ id: 41 });
+    workflowEngine.recalcTaskDesignStatusInTransaction.mockResolvedValue({
+      previousStatus: "DESIGN_REVIEW",
+      nextStatus: "DESIGN_APPROVED",
+      enteredDesignApproved: true,
+      serialNumber: "TJ-10",
+    });
 
     await service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER");
 
@@ -333,6 +348,10 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(eventBus.publish).toHaveBeenCalledWith(
       "image_task.review_approved",
       expect.objectContaining({ reviewedAttachmentId: 41 }),
+    );
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "workflow.completed",
+      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10" }),
     );
   });
 
@@ -358,6 +377,12 @@ describe("ImageTasksService stage A audit writes", () => {
     });
     prisma.auditEvent.findFirst.mockResolvedValue({ metadata: JSON.stringify({ submittedAttachmentId: 51 }) });
     prisma.attachment.findFirst.mockResolvedValue({ id: 51 });
+    workflowEngine.recalcTaskDesignStatusInTransaction.mockResolvedValue({
+      previousStatus: "DESIGN_REVIEW",
+      nextStatus: "DESIGN_APPROVED",
+      enteredDesignApproved: true,
+      serialNumber: "TJ-10",
+    });
 
     await service.batchReviewTasks({ taskIds: [10], action: "APPROVE" }, 9, "DESIGN_MANAGER");
 
@@ -368,6 +393,10 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(log.log).toHaveBeenCalledWith(expect.objectContaining({
       afterValue: expect.objectContaining({ reviewedAttachmentId: 51 }),
     }));
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "workflow.completed",
+      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10" }),
+    );
   });
 
   it("allows a returned task to resubmit without creating a second assignment", async () => {
