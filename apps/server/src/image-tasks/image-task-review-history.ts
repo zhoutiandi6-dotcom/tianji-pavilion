@@ -6,6 +6,11 @@ export const IMAGE_TASK_REVIEW_AUDIT_ACTION = {
   rejected: "review_reject",
 } as const;
 
+export type ImageTaskReviewVersionMetadata = {
+  submittedAttachmentId?: number;
+  reviewedAttachmentId?: number;
+};
+
 // Read old records without rewriting historical audit data.
 export const IMAGE_TASK_REVIEW_HISTORY_ACTIONS: string[] = [
   IMAGE_TASK_REVIEW_AUDIT_ACTION.submitted,

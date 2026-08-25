@@ -33,15 +33,15 @@ export class ImageTaskStarted {
   get name() { return "image_task.started"; }
 }
 export class ImageTaskSubmittedForReview {
-  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly designerId: number, public readonly imageTitle?: string) {}
+  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly designerId: number, public readonly imageTitle?: string, public readonly submittedAttachmentId?: number) {}
   get name() { return "image_task.submitted_for_review"; }
 }
 export class ImageTaskReviewApproved {
-  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly reviewerId: number, public readonly designerId: number | null, public readonly imageTitle?: string) {}
+  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly reviewerId: number, public readonly designerId: number | null, public readonly imageTitle?: string, public readonly reviewedAttachmentId?: number) {}
   get name() { return "image_task.review_approved"; }
 }
 export class ImageTaskReviewRejected {
-  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly reviewerId: number, public readonly designerId: number | null, public readonly remark?: string, public readonly imageTitle?: string) {}
+  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly reviewerId: number, public readonly designerId: number | null, public readonly remark?: string, public readonly imageTitle?: string, public readonly reviewedAttachmentId?: number) {}
   get name() { return "image_task.review_rejected"; }
 }
 export class ImageTaskAssigned {

@@ -17,6 +17,8 @@ export type ImageTaskReviewHistoryItemDto = {
   action: string;
   operator: ImageTaskDetailPersonDto | null;
   reason: string | null;
+  submittedAttachmentId: number | null;
+  reviewedAttachmentId: number | null;
   createdAt: Date;
 };
 

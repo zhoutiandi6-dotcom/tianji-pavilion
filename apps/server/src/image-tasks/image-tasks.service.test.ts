@@ -9,19 +9,32 @@ describe("ImageTasksService stage A audit writes", () => {
   let weeklyPlans: any;
   let operationsApprovalPlans: any;
 
-  const imageTask = (overrides: Record<string, any> = {}) => ({
-    id: 1,
-    taskId: 10,
-    imageIndex: 1,
-    imageTitle: "Main image",
-    designerId: null,
-    status: "PENDING_ASSIGNMENT",
-    reviewRemark: null,
-    completedAttachmentUrl: null,
-    attachments: [],
-    task: { id: 10, creatorId: 2, workflowStatus: "OPS_APPROVED" },
-    ...overrides,
-  });
+  const imageTask = (overrides: Record<string, any> = {}) => {
+    const task = {
+      id: 1,
+      taskId: 10,
+      imageIndex: 1,
+      imageTitle: "Main image",
+      designerId: null,
+      status: "PENDING_ASSIGNMENT",
+      reviewRemark: null,
+      completedAttachmentUrl: null,
+      attachments: [],
+      task: { id: 10, creatorId: 2, workflowStatus: "OPS_APPROVED" },
+      ...overrides,
+    };
+    const attachments = task.attachments.map((attachment: any, index: number) => ({
+      ...attachment,
+      id: attachment.id ?? 21 + index,
+      uploadedAt: attachment.uploadedAt ?? new Date("2026-08-10T01:40:00.000Z"),
+    }));
+    const currentCompletedAttachment = attachments.find((attachment: any) => attachment.category === "IMAGE_COMPLETED");
+    return {
+      ...task,
+      attachments,
+      completedAttachmentUrl: task.completedAttachmentUrl ?? (currentCompletedAttachment ? `/api/attachments/${currentCompletedAttachment.id}/download` : null),
+    };
+  };
 
   beforeEach(() => {
     prisma = {
@@ -39,7 +52,9 @@ describe("ImageTasksService stage A audit writes", () => {
       auditEvent: {
         create: jest.fn().mockResolvedValue({ id: 100 }),
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
+      attachment: { findFirst: jest.fn().mockResolvedValue({ id: 21 }) },
       operationLog: { findMany: jest.fn().mockResolvedValue([]) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
@@ -111,6 +126,7 @@ describe("ImageTasksService stage A audit writes", () => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
       status: "SUBMITTED_FOR_REVIEW",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
       task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
     }));
 
@@ -211,6 +227,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
   });
 
   it("makes concurrent approve and reject mutually exclusive", async () => {
@@ -238,6 +255,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
   });
 
   it("allows only one concurrent reject transition and its review side effects", async () => {
@@ -266,6 +284,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
   });
 
   it("submits a designer task atomically into pending design review with submission audit fields", async () => {
@@ -279,11 +298,76 @@ describe("ImageTasksService stage A audit writes", () => {
     await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
 
     expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
-      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null },
+      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null, completedAttachmentUrl: "/api/attachments/21/download" },
       data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", reviewStatus: "PENDING", submittedAt: expect.any(Date), submittedById: 7 }),
     });
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
     expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "design_review_submitted", operatorId: 7 }) }));
+    const submissionAudit = prisma.auditEvent.create.mock.calls[0][0].data;
+    expect(JSON.parse(submissionAudit.metadata)).toMatchObject({ submittedAttachmentId: 21 });
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "image_task.submitted_for_review",
+      expect.objectContaining({ submittedAttachmentId: 21 }),
+    );
+  });
+
+  it("binds a manager decision to the version recorded by the latest review submission", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "SUBMITTED_FOR_REVIEW",
+      completedAttachmentUrl: "/api/attachments/42/download",
+      attachments: [
+        { id: 41, category: "IMAGE_COMPLETED", uploadedAt: new Date("2026-08-10T01:00:00.000Z") },
+        { id: 42, category: "IMAGE_COMPLETED", uploadedAt: new Date("2026-08-10T02:00:00.000Z") },
+      ],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_REVIEW" },
+    }));
+    prisma.auditEvent.findFirst.mockResolvedValue({ metadata: JSON.stringify({ submittedAttachmentId: 41 }) });
+    prisma.attachment.findFirst.mockResolvedValue({ id: 41 });
+
+    await service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER");
+
+    expect(prisma.attachment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 41, imageTaskId: 1, category: "IMAGE_COMPLETED", deletedAt: null }),
+    }));
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "image_task.review_approved",
+      expect.objectContaining({ reviewedAttachmentId: 41 }),
+    );
+  });
+
+  it("binds every batch review event to its submitted artwork version", async () => {
+    prisma.task.findMany.mockResolvedValue([{
+      id: 10,
+      workflowStatus: "DESIGN_REVIEW",
+      imageTasks: [{
+        id: 1,
+        taskId: 10,
+        designerId: 7,
+        imageTitle: "Main image",
+        status: "SUBMITTED_FOR_REVIEW",
+        completedAttachmentUrl: "/api/attachments/51/download",
+        reviewRemark: null,
+        attachments: [{ id: 51, category: "IMAGE_COMPLETED", uploadedAt: new Date("2026-08-10T03:00:00.000Z") }],
+      }],
+    }]);
+    prisma.imageTask.findUnique.mockResolvedValue({
+      id: 1,
+      completedAttachmentUrl: "/api/attachments/51/download",
+      attachments: [{ id: 51, category: "IMAGE_COMPLETED", uploadedAt: new Date("2026-08-10T03:00:00.000Z") }],
+    });
+    prisma.auditEvent.findFirst.mockResolvedValue({ metadata: JSON.stringify({ submittedAttachmentId: 51 }) });
+    prisma.attachment.findFirst.mockResolvedValue({ id: 51 });
+
+    await service.batchReviewTasks({ taskIds: [10], action: "APPROVE" }, 9, "DESIGN_MANAGER");
+
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "image_task.review_approved",
+      expect.objectContaining({ reviewedAttachmentId: 51 }),
+    );
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({
+      afterValue: expect.objectContaining({ reviewedAttachmentId: 51 }),
+    }));
   });
 
   it("allows a returned task to resubmit without creating a second assignment", async () => {
@@ -297,7 +381,7 @@ describe("ImageTasksService stage A audit writes", () => {
     await service.update(1, { status: "SUBMITTED_FOR_REVIEW" } as any, 7, "DESIGNER");
 
     expect(prisma.imageTask.updateMany).toHaveBeenCalledWith({
-      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null },
+      where: { id: 1, designerId: 7, status: { in: ["IN_PROGRESS", "REVISION_REQUIRED"] }, deletedAt: null, completedAttachmentUrl: "/api/attachments/21/download" },
       data: expect.objectContaining({ status: "SUBMITTED_FOR_REVIEW", submittedById: 7 }),
     });
     expect(weeklyPlans.addAssignedTasksInTransaction).not.toHaveBeenCalled();
@@ -547,25 +631,25 @@ describe("ImageTasksService stage A audit writes", () => {
       {
         action: "design_review_submitted",
         operatorId: 7,
-        metadata: JSON.stringify({ reason: "Ready for review" }),
+        metadata: JSON.stringify({ reason: "Ready for review", submittedAttachmentId: 101 }),
         createdAt: new Date("2026-08-10T03:00:00.000Z"),
       },
       {
         action: "review_reject",
         operatorId: 8,
-        metadata: JSON.stringify({ remark: "Improve the logo" }),
+        metadata: JSON.stringify({ remark: "Improve the logo", reviewedAttachmentId: 101 }),
         createdAt: new Date("2026-08-10T04:00:00.000Z"),
       },
       {
         action: "design_review_resubmitted",
         operatorId: 7,
-        metadata: JSON.stringify({ reason: "Updated artwork" }),
+        metadata: JSON.stringify({ reason: "Updated artwork", submittedAttachmentId: 102 }),
         createdAt: new Date("2026-08-10T05:00:00.000Z"),
       },
       {
         action: "review_approve",
         operatorId: 8,
-        metadata: JSON.stringify({}),
+        metadata: JSON.stringify({ reviewedAttachmentId: 102 }),
         createdAt: new Date("2026-08-10T06:00:00.000Z"),
       },
     ]);
@@ -589,11 +673,23 @@ describe("ImageTasksService stage A audit writes", () => {
       completedAttachments: [{ id: 21, fileName: "completed.png", category: "IMAGE_COMPLETED" }],
       reviewHistory: expect.arrayContaining([
         expect.objectContaining({ action: "design_review_submitted", reason: "Ready for review" }),
-        expect.objectContaining({ action: "review_reject", reason: "Improve the logo" }),
-        expect.objectContaining({ action: "design_review_resubmitted", reason: "Updated artwork" }),
-        expect.objectContaining({ action: "review_approve" }),
+        expect.objectContaining({ action: "review_reject", reason: "Improve the logo", reviewedAttachmentId: 101 }),
+        expect.objectContaining({ action: "design_review_resubmitted", reason: "Updated artwork", submittedAttachmentId: 102 }),
+        expect.objectContaining({ action: "review_approve", reviewedAttachmentId: 102 }),
       ]),
     });
+    expect(result.reviewHistory.map((item) => item.action)).toEqual([
+      "design_review_submitted",
+      "review_reject",
+      "design_review_resubmitted",
+      "review_approve",
+    ]);
+    expect(result.reviewHistory.map((item) => [item.submittedAttachmentId, item.reviewedAttachmentId])).toEqual([
+      [101, null],
+      [null, 101],
+      [102, null],
+      [null, 102],
+    ]);
     expect(JSON.stringify(result)).not.toMatch(/storagePath|password|token|cookie|email/i);
     expect(prisma.auditEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ resourceType: "image_task", resourceId: 1 }),

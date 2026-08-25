@@ -15,7 +15,11 @@ import { UpdateImageTaskDto } from "./dto/update-image-task.dto";
 import { BatchAssignImageTasksDto } from "./dto/batch-assign-image-tasks.dto";
 import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
-import { IMAGE_TASK_REVIEW_HISTORY_ACTIONS } from "./image-task-review-history";
+import {
+  IMAGE_TASK_REVIEW_AUDIT_ACTION,
+  IMAGE_TASK_REVIEW_HISTORY_ACTIONS,
+  type ImageTaskReviewVersionMetadata,
+} from "./image-task-review-history";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
 import {
@@ -115,6 +119,60 @@ export class ImageTasksService {
     });
   }
 
+  private parseReviewAttachmentId(metadata: string | null | undefined, field: keyof ImageTaskReviewVersionMetadata) {
+    if (!metadata) return null;
+    try {
+      const parsed = JSON.parse(metadata);
+      const value = parsed?.[field] ?? parsed?.afterValue?.[field];
+      return Number.isInteger(value) && value > 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveCurrentCompletedAttachmentId(imageTask: any) {
+    const attachments = (imageTask.attachments || [])
+      .filter((attachment: any) => attachment.category === "IMAGE_COMPLETED" && Number.isInteger(attachment.id));
+    if (!attachments.length) throw new BadRequestException("At least one completed attachment is required before design review submission");
+    if (imageTask.completedAttachmentUrl) {
+      const pointedAttachment = attachments.find((attachment: any) => imageTask.completedAttachmentUrl === `/api/attachments/${attachment.id}/download`);
+      if (!pointedAttachment) throw new ConflictException("Current completed attachment pointer is inconsistent. Refresh and try again.");
+      return pointedAttachment.id;
+    }
+    return [...attachments].sort((left: any, right: any) => {
+      const rightTime = right.uploadedAt ? new Date(right.uploadedAt).getTime() : 0;
+      const leftTime = left.uploadedAt ? new Date(left.uploadedAt).getTime() : 0;
+      return rightTime - leftTime || right.id - left.id;
+    })[0].id;
+  }
+
+  private async resolveReviewedAttachmentIdInTransaction(tx: any, imageTask: any) {
+    const latestSubmission = await tx.auditEvent.findFirst({
+      where: {
+        resourceType: "image_task",
+        resourceId: imageTask.id,
+        action: { in: [IMAGE_TASK_REVIEW_AUDIT_ACTION.submitted, IMAGE_TASK_REVIEW_AUDIT_ACTION.resubmitted] },
+      },
+      select: { metadata: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+    const submittedAttachmentId = this.parseReviewAttachmentId(latestSubmission?.metadata, "submittedAttachmentId");
+    if (submittedAttachmentId) {
+      const submittedAttachment = await tx.attachment.findFirst({
+        where: {
+          id: submittedAttachmentId,
+          imageTaskId: imageTask.id,
+          category: "IMAGE_COMPLETED",
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!submittedAttachment) throw new ConflictException("Submitted completed attachment is unavailable. Refresh and try again.");
+      return submittedAttachment.id;
+    }
+    return this.resolveCurrentCompletedAttachmentId(imageTask);
+  }
+
   async findOne(id: number, userId: number, userRole: string) {
     const imageTask = await this.prisma.imageTask.findUnique({
       where: { id },
@@ -195,9 +253,10 @@ export class ImageTasksService {
       if (!raw) return null;
       try {
         const parsed = JSON.parse(raw);
-        return typeof parsed.reviewRemark === "string" ? parsed.reviewRemark
-          : typeof parsed.remark === "string" ? parsed.remark
-            : typeof parsed.reason === "string" ? parsed.reason
+        const source = parsed?.afterValue || parsed;
+        return typeof source.reviewRemark === "string" ? source.reviewRemark
+          : typeof source.remark === "string" ? source.remark
+            : typeof source.reason === "string" ? source.reason
               : null;
       } catch {
         return null;
@@ -225,6 +284,8 @@ export class ImageTasksService {
         action: event.action,
         operator: toPerson(actorById.get(event.operatorId ?? -1) || null),
         reason: readReason(event.metadata),
+        submittedAttachmentId: this.parseReviewAttachmentId(event.metadata, "submittedAttachmentId"),
+        reviewedAttachmentId: this.parseReviewAttachmentId(event.metadata, "reviewedAttachmentId"),
         createdAt: event.createdAt,
       })),
     ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
@@ -397,7 +458,7 @@ export class ImageTasksService {
     const taskIds = Array.from(new Set(dto.taskIds.map(Number))).slice(0, 100);
     const remark = dto.remark?.trim();
     if (dto.action === "REJECT" && !remark) throw new BadRequestException("请填写退回原因");
-    const tasks = await this.prisma.task.findMany({ where: { id: { in: taskIds }, deletedAt: null }, include: { imageTasks: { include: { attachments: { where: { deletedAt: null }, select: { category: true } } } } } });
+    const tasks = await this.prisma.task.findMany({ where: { id: { in: taskIds }, deletedAt: null }, include: { imageTasks: { include: { attachments: { where: { deletedAt: null }, select: { id: true, category: true, uploadedAt: true } } } } } });
     if (tasks.length !== taskIds.length) throw new NotFoundException("存在法旨不存在或已删除");
     if (tasks.some((task) => task.workflowStatus !== "DESIGN_REVIEW")) throw new ForbiddenException("仅待设计审核的法旨可批量审核");
     const imageTasks = tasks.flatMap((task) => task.imageTasks.filter((item) => item.status === "SUBMITTED_FOR_REVIEW"));
@@ -407,6 +468,7 @@ export class ImageTasksService {
     }
     const status = dto.action === "APPROVE" ? "APPROVED" : "REVISION_REQUIRED";
     const approvedAt = dto.action === "APPROVE" ? new Date() : null;
+    const reviewedAttachmentIds = new Map<number, number>();
     await this.prisma.$transaction(async (tx: any) => {
       for (const item of imageTasks) {
         await tx.imageTask.update({
@@ -419,14 +481,25 @@ export class ImageTasksService {
             approvedById: dto.action === "APPROVE" ? userId : null,
           },
         });
+        const reviewedTask = await tx.imageTask.findUnique({
+          where: { id: item.id },
+          select: {
+            id: true,
+            completedAttachmentUrl: true,
+            attachments: { where: { deletedAt: null }, select: { id: true, category: true, uploadedAt: true } },
+          },
+        });
+        if (!reviewedTask) throw new NotFoundException("Image task not found");
+        reviewedAttachmentIds.set(item.id, await this.resolveReviewedAttachmentIdInTransaction(tx, reviewedTask));
         if (dto.action === "APPROVE" && approvedAt) {
           await this.weeklyPlans.completeApprovedImageTaskInTransaction(tx, item.id, userId, approvedAt);
         }
       }
     });
     for (const item of imageTasks) {
-      await this.log.log({ userId, action: dto.action === "APPROVE" ? "design_review_approve" : "design_review_reject", targetType: "image_task", targetId: item.id, content: dto.action === "APPROVE" ? "批量审核通过" : "批量退回修改", afterValue: { status, reviewRemark: remark } });
-      const event = dto.action === "APPROVE" ? new ImageTaskReviewApproved(item.id, item.taskId, userId, item.designerId, item.imageTitle || undefined) : new ImageTaskReviewRejected(item.id, item.taskId, userId, item.designerId, remark, item.imageTitle || undefined);
+      const reviewedAttachmentId = reviewedAttachmentIds.get(item.id);
+      await this.log.log({ userId, action: dto.action === "APPROVE" ? "design_review_approve" : "design_review_reject", targetType: "image_task", targetId: item.id, content: dto.action === "APPROVE" ? "批量审核通过" : "批量退回修改", afterValue: { status, reviewRemark: remark, reviewedAttachmentId } });
+      const event = dto.action === "APPROVE" ? new ImageTaskReviewApproved(item.id, item.taskId, userId, item.designerId, item.imageTitle || undefined, reviewedAttachmentId) : new ImageTaskReviewRejected(item.id, item.taskId, userId, item.designerId, remark, item.imageTitle || undefined, reviewedAttachmentId);
       await this.eventBus.publish(event.name, event);
     }
     await Promise.all(taskIds.map((taskId) => this.workflowEngine.recalcTaskStatus(taskId)));
@@ -436,7 +509,7 @@ export class ImageTasksService {
   async update(id: number, dto: UpdateImageTaskDto, userId: number, userRole: string) {
     const imageTask = await this.prisma.imageTask.findUnique({
       where: { id },
-      include: { task: true, attachments: { where: { deletedAt: null }, select: { category: true } } },
+      include: { task: true, attachments: { where: { deletedAt: null }, select: { id: true, category: true, uploadedAt: true } } },
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
 
@@ -451,14 +524,12 @@ export class ImageTasksService {
       }
       const data: any = {};
       let expectedStatuses: string[] | null = null;
+      let submittedAttachmentId: number | null = null;
       if (dto.status === "IN_PROGRESS" && imageTask.status === "NOT_STARTED") {
         data.status = "IN_PROGRESS";
         expectedStatuses = ["NOT_STARTED"];
       }
       if (dto.status === "SUBMITTED_FOR_REVIEW" && ["IN_PROGRESS", "REVISION_REQUIRED"].includes(imageTask.status)) {
-        if (!imageTask.attachments.some((attachment: any) => attachment.category === "IMAGE_COMPLETED")) {
-          throw new BadRequestException("At least one completed attachment is required before design review submission");
-        }
         data.status = "SUBMITTED_FOR_REVIEW";
         data.reviewStatus = "PENDING";
         data.submittedAt = new Date();
@@ -470,8 +541,28 @@ export class ImageTasksService {
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid image task update");
       const result = await this.prisma.$transaction(async (tx: any) => {
         if (data.status && expectedStatuses) {
+          let currentCompletedAttachmentUrl: string | null = null;
+          if (data.status === "SUBMITTED_FOR_REVIEW") {
+            const current = await tx.imageTask.findUnique({
+              where: { id },
+              select: {
+                id: true,
+                completedAttachmentUrl: true,
+                attachments: { where: { deletedAt: null }, select: { id: true, category: true, uploadedAt: true } },
+              },
+            });
+            if (!current) throw new NotFoundException("Image task not found");
+            submittedAttachmentId = this.resolveCurrentCompletedAttachmentId(current);
+            currentCompletedAttachmentUrl = current.completedAttachmentUrl;
+          }
           const transition = await tx.imageTask.updateMany({
-            where: { id, designerId: userId, status: { in: expectedStatuses }, deletedAt: null },
+            where: {
+              id,
+              designerId: userId,
+              status: { in: expectedStatuses },
+              deletedAt: null,
+              ...(data.status === "SUBMITTED_FOR_REVIEW" ? { completedAttachmentUrl: currentCompletedAttachmentUrl } : {}),
+            },
             data,
           });
           if (transition.count !== 1) {
@@ -490,7 +581,7 @@ export class ImageTasksService {
               resourceId: id,
               action: imageTask.status === "REVISION_REQUIRED" ? "design_review_resubmitted" : "design_review_submitted",
               operatorId: userId,
-              metadata: JSON.stringify({ taskId: imageTask.taskId, previousStatus: imageTask.status, submittedAt: data.submittedAt.toISOString(), submittedById: userId }),
+              metadata: JSON.stringify({ taskId: imageTask.taskId, previousStatus: imageTask.status, submittedAt: data.submittedAt.toISOString(), submittedById: userId, submittedAttachmentId }),
             },
           });
         }
@@ -501,7 +592,7 @@ export class ImageTasksService {
       } else if (data.status === "SUBMITTED_FOR_REVIEW") {
         await this.eventBus.publish(
           "image_task.submitted_for_review",
-          new ImageTaskSubmittedForReview(id, imageTask.taskId, userId, imageTask.imageTitle || undefined),
+          new ImageTaskSubmittedForReview(id, imageTask.taskId, userId, imageTask.imageTitle || undefined, submittedAttachmentId ?? undefined),
         );
       }
       await this.log.log({
@@ -570,6 +661,7 @@ export class ImageTasksService {
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
       const isReviewDecision = data.status === "APPROVED" || data.status === "REVISION_REQUIRED";
+      let reviewedAttachmentId: number | null = null;
       const result = await this.prisma.$transaction(async (tx: any) => {
         let updated: any;
         if (isReviewDecision) {
@@ -582,6 +674,16 @@ export class ImageTasksService {
             if (!current) throw new NotFoundException("Image task not found");
             throw new ConflictException(`Image task review status has changed to ${current.status}. Refresh and try again.`);
           }
+          const reviewedTask = await tx.imageTask.findUnique({
+            where: { id },
+            select: {
+              id: true,
+              completedAttachmentUrl: true,
+              attachments: { where: { deletedAt: null }, select: { id: true, category: true, uploadedAt: true } },
+            },
+          });
+          if (!reviewedTask) throw new NotFoundException("Image task not found");
+          reviewedAttachmentId = await this.resolveReviewedAttachmentIdInTransaction(tx, reviewedTask);
           updated = await tx.imageTask.findUnique({ where: { id } });
         } else {
           updated = await tx.imageTask.update({ where: { id }, data });
@@ -616,8 +718,8 @@ export class ImageTasksService {
       if (data.status && data.status !== imageTask.status) {
         await this.log.log({ userId, action: "update_image_task_status", targetType: "image_task", targetId: id, content: `Image task status changed: ${imageTask.status} -> ${data.status}` });
         const event = data.status === "APPROVED"
-          ? new ImageTaskReviewApproved(id, imageTask.taskId, userId, imageTask.designerId, imageTask.imageTitle || undefined)
-          : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined);
+          ? new ImageTaskReviewApproved(id, imageTask.taskId, userId, imageTask.designerId, imageTask.imageTitle || undefined, reviewedAttachmentId ?? undefined)
+          : new ImageTaskReviewRejected(id, imageTask.taskId, userId, imageTask.designerId, data.reviewRemark, imageTask.imageTitle || undefined, reviewedAttachmentId ?? undefined);
         await this.eventBus.publish(event.name, event);
       }
       return result;
