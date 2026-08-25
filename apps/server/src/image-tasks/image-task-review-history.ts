@@ -25,3 +25,14 @@ export const IMAGE_TASK_REVIEW_HISTORY_ACTIONS: string[] = [
   "design_review_approve",
   "design_review_reject",
 ];
+
+// Old review events may have an incorrect operatorId while retaining a
+// reliable reviewerId in metadata. Limit compatibility to review decisions.
+export const IMAGE_TASK_REVIEW_DECISION_ACTIONS = new Set<string>([
+  IMAGE_TASK_REVIEW_AUDIT_ACTION.approved,
+  IMAGE_TASK_REVIEW_AUDIT_ACTION.rejected,
+  "design_review_approved",
+  "design_review_rejected",
+  "design_review_approve",
+  "design_review_reject",
+]);

@@ -665,8 +665,8 @@ describe("ImageTasksService stage A audit writes", () => {
       },
       {
         action: "review_reject",
-        operatorId: 8,
-        metadata: JSON.stringify({ remark: "Improve the logo", reviewedAttachmentId: 101 }),
+        operatorId: 7,
+        metadata: JSON.stringify({ reviewerId: 8, remark: "Improve the logo", reviewedAttachmentId: 101 }),
         createdAt: new Date("2026-08-10T04:00:00.000Z"),
       },
       {
@@ -719,6 +719,10 @@ describe("ImageTasksService stage A audit writes", () => {
       [102, null],
       [null, 102],
     ]);
+    expect(result.reviewHistory.find((item) => item.action === "review_reject")?.operator).toEqual({
+      id: 8,
+      displayName: "Design Manager",
+    });
     expect(JSON.stringify(result)).not.toMatch(/storagePath|password|token|cookie|email/i);
     expect(prisma.auditEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ resourceType: "image_task", resourceId: 1 }),

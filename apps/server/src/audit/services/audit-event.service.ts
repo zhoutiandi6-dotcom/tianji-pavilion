@@ -27,6 +27,20 @@ export class AuditEventService {
     this.logger.log(`AuditEvent subscribed to ${events.length} events`);
   }
 
+  private resolveOperatorId(event: any): number | null {
+    // Review decisions carry both the reviewer and the assigned designer. The
+    // reviewer is the actor; a generic field-priority fallback is incorrect.
+    if (event.name === "image_task.review_approved" || event.name === "image_task.review_rejected") {
+      return event.reviewerId ?? null;
+    }
+
+    if (event.name === "image_task.submitted_for_review") {
+      return event.designerId ?? null;
+    }
+
+    return event.userId || event.approverId || event.designerId || event.creatorId || event.reviewerId || null;
+  }
+
   private async onEvent(event: any) {
     try {
       const actionMap: Record<string, string> = {
@@ -55,7 +69,7 @@ export class AuditEventService {
           resourceId,
           action,
           correlationId: event.taskId ? 'task_' + event.taskId : event.imageTaskId ? 'img_' + event.imageTaskId : null,
-          operatorId: event.userId || event.approverId || event.designerId || event.creatorId || event.reviewerId || null,
+          operatorId: this.resolveOperatorId(event),
           metadata: JSON.stringify(event),
         },
       });

@@ -18,6 +18,7 @@ import { BatchAssignTasksDto } from "./dto/batch-assign-tasks.dto";
 import { BatchReviewTasksDto } from "./dto/batch-review-tasks.dto";
 import {
   IMAGE_TASK_REVIEW_AUDIT_ACTION,
+  IMAGE_TASK_REVIEW_DECISION_ACTIONS,
   IMAGE_TASK_REVIEW_HISTORY_ACTIONS,
   type ImageTaskReviewVersionMetadata,
 } from "./image-task-review-history";
@@ -235,8 +236,27 @@ export class ImageTasksService {
       orderBy: { createdAt: "asc" },
     });
 
-    const actorIds = Array.from(new Set(auditEvents
-      .map((event) => event.operatorId)
+    const parseMetadata = (raw: string | null): Record<string, unknown> | null => {
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const readReviewerId = (raw: string | null): number | null => {
+      const reviewerId = parseMetadata(raw)?.reviewerId;
+      return typeof reviewerId === "number" && Number.isInteger(reviewerId) ? reviewerId : null;
+    };
+    const historyEvents = auditEvents.map((event) => ({
+      event,
+      actorId: IMAGE_TASK_REVIEW_DECISION_ACTIONS.has(event.action)
+        ? readReviewerId(event.metadata) ?? event.operatorId
+        : event.operatorId,
+    }));
+    const actorIds = Array.from(new Set(historyEvents
+      .map(({ actorId }) => actorId)
       .filter((actorId): actorId is number => actorId !== null)));
     const auditActors = actorIds.length
       ? await this.prisma.user.findMany({
@@ -280,10 +300,10 @@ export class ImageTasksService {
     });
 
     const reviewHistory: ImageTaskReviewHistoryItemDto[] = [
-      ...auditEvents.map((event) => ({
+      ...historyEvents.map(({ event, actorId }) => ({
         source: "AUDIT_EVENT" as const,
         action: event.action,
-        operator: toPerson(actorById.get(event.operatorId ?? -1) || null),
+        operator: toPerson(actorById.get(actorId ?? -1) || null),
         reason: readReason(event.metadata),
         submittedAttachmentId: this.parseReviewAttachmentId(event.metadata, "submittedAttachmentId"),
         reviewedAttachmentId: this.parseReviewAttachmentId(event.metadata, "reviewedAttachmentId"),
