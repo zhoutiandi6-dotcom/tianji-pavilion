@@ -542,6 +542,15 @@ export class ImageTasksService {
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
 
+    const isReviewDecision = dto.status === "APPROVED" || dto.status === "REVISION_REQUIRED";
+    const canReviewImageTask = userRole === "DESIGN_MANAGER" || ADMIN_ROLES.includes(userRole);
+    if (isReviewDecision) {
+      if (!canReviewImageTask) throw new ForbiddenException("No permission to review image task");
+      if (imageTask.status !== "SUBMITTED_FOR_REVIEW") {
+        throw new ConflictException("Image task is no longer pending review. Refresh and try again.");
+      }
+    }
+
     if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId && (userRole === "DESIGN_MANAGER" || ADMIN_ROLES.includes(userRole))) {
       throw new BadRequestException("Designer assignment must use the whole-decree assignment endpoint");
     }
@@ -649,8 +658,8 @@ export class ImageTasksService {
       return result;
     }
 
-    if (userRole === "DESIGN_MANAGER" || (ADMIN_ROLES.includes(userRole) && (dto.designerId !== undefined || dto.status === "APPROVED" || dto.status === "REVISION_REQUIRED"))) {
-      if (!["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"].includes(imageTask.task.workflowStatus)) {
+    if (userRole === "DESIGN_MANAGER" || (ADMIN_ROLES.includes(userRole) && (dto.designerId !== undefined || isReviewDecision))) {
+      if (!isReviewDecision && !["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIGN", "DESIGN_REVIEW"].includes(imageTask.task.workflowStatus)) {
         throw new ForbiddenException("Designers can only be assigned after operation manager approval");
       }
       const data: any = {};
@@ -671,10 +680,7 @@ export class ImageTasksService {
         data.assignedById = userId;
         data.status = "NOT_STARTED";
       }
-      if (dto.status === "APPROVED" || dto.status === "REVISION_REQUIRED") {
-        if (imageTask.status !== "SUBMITTED_FOR_REVIEW") {
-          throw new ForbiddenException("Only submitted image tasks can be reviewed");
-        }
+      if (isReviewDecision) {
         if (dto.status === "REVISION_REQUIRED" && !(dto.reviewRemark ?? dto.remark)?.trim()) {
           throw new BadRequestException("请填写退回原因");
         }
@@ -689,7 +695,6 @@ export class ImageTasksService {
         data.approvedById = dto.status === "APPROVED" ? userId : null;
       }
       if (!Object.keys(data).length) throw new ForbiddenException("Invalid design manager update");
-      const isReviewDecision = data.status === "APPROVED" || data.status === "REVISION_REQUIRED";
       let reviewedAttachmentId: number | null = null;
       const reviewResult = await this.prisma.$transaction(async (tx: any) => {
         let updated: any;

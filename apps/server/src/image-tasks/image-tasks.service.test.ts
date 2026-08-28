@@ -152,7 +152,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
   });
 
-  it.each(["IN_PROGRESS", "REVISION_REQUIRED", "APPROVED", "COMPLETED"])("rejects %s manager approval before writing review side effects", async (status) => {
+  it.each(["IN_PROGRESS", "REVISION_REQUIRED", "APPROVED", "COMPLETED"])("returns a review conflict for %s manager approval before writing review side effects", async (status) => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
       status,
@@ -161,11 +161,46 @@ describe("ImageTasksService stage A audit writes", () => {
     }));
 
     await expect(service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"))
-      .rejects.toThrow("Only submitted image tasks can be reviewed");
+      .rejects.toMatchObject({ status: 409 });
 
     expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
     expect(workflowEngine.recalcTaskStatusInTransaction).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("returns a review conflict instead of assignment validation after a final approval", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "APPROVED",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "DESIGN_APPROVED" },
+    }));
+
+    const error = await service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER").catch((requestError) => requestError);
+    expect(error).toMatchObject({ status: 409 });
+    expect(error.message).toContain("Image task is no longer pending review");
+
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(weeklyPlans.completeApprovedImageTaskInTransaction).not.toHaveBeenCalled();
+    expect(workflowEngine.recalcTaskDesignStatusInTransaction).not.toHaveBeenCalled();
+    expect(log.log).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("returns a review conflict for a repeated rejection", async () => {
+    prisma.imageTask.findUnique.mockResolvedValue(imageTask({
+      designerId: 7,
+      status: "REVISION_REQUIRED",
+      attachments: [{ category: "IMAGE_COMPLETED" }],
+      task: { id: 10, creatorId: 2, workflowStatus: "IN_DESIGN" },
+    }));
+
+    await expect(service.update(1, { status: "REVISION_REQUIRED", reviewRemark: "Revise" } as any, 9, "DESIGN_MANAGER"))
+      .rejects.toMatchObject({ status: 409 });
+    expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
+    expect(workflowEngine.recalcTaskDesignStatusInTransaction).not.toHaveBeenCalled();
+    expect(log.log).not.toHaveBeenCalled();
     expect(eventBus.publish).not.toHaveBeenCalled();
   });
 
@@ -223,6 +258,12 @@ describe("ImageTasksService stage A audit writes", () => {
       persistedStatus = data.status;
       return { count: 1 };
     });
+    workflowEngine.recalcTaskDesignStatusInTransaction.mockResolvedValue({
+      previousStatus: "DESIGN_REVIEW",
+      nextStatus: "DESIGN_APPROVED",
+      enteredDesignApproved: true,
+      serialNumber: "TJ-10",
+    });
 
     const results = await Promise.allSettled([
       service.update(1, { status: "APPROVED" } as any, 9, "DESIGN_MANAGER"),
@@ -231,12 +272,15 @@ describe("ImageTasksService stage A audit writes", () => {
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    expect(rejected?.reason).toMatchObject({ status: 409 });
     expect(persistedStatus).toBe("APPROVED");
     expect(weeklyPlans.completeApprovedImageTaskInTransaction).toHaveBeenCalledTimes(1);
     expect(workflowEngine.recalcTaskDesignStatusInTransaction).toHaveBeenCalledTimes(1);
     expect(log.log).toHaveBeenCalledTimes(1);
-    expect(eventBus.publish).toHaveBeenCalledTimes(1);
-    expect(eventBus.publish.mock.calls[0][1]).toMatchObject({ reviewedAttachmentId: 21 });
+    expect(eventBus.publish.mock.calls.filter((call: any[]) => call[0] === "image_task.review_approved")).toHaveLength(1);
+    expect(eventBus.publish.mock.calls.filter((call: any[]) => call[0] === "workflow.completed")).toHaveLength(1);
+    expect(eventBus.publish.mock.calls.find((call: any[]) => call[0] === "image_task.review_approved")?.[1]).toMatchObject({ reviewedAttachmentId: 21 });
   });
 
   it("makes concurrent approve and reject mutually exclusive", async () => {
