@@ -92,6 +92,12 @@
   line-height: 1.65;
 }
 
+.approveDialogVersion {
+  margin: 0;
+  color: #1f4e8c;
+  font-weight: 600;
+}
+
 .designerActionCopy {
   display: grid;
   min-width: 0;

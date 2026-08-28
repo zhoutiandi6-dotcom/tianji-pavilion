@@ -66,11 +66,14 @@ export default function ImageTaskDetailPage() {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectRemark, setRejectRemark] = useState('');
   const [rejectLoading, setRejectLoading] = useState(false);
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [approveLoading, setApproveLoading] = useState(false);
   const hasDetailRef = useRef(false);
   const actionRunningRef = useRef(false);
   const uploadRunningRef = useRef(false);
   const submitRunningRef = useRef(false);
   const rejectRunningRef = useRef(false);
+  const approveRunningRef = useRef(false);
   const completedArtworkInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadDetail = useCallback(async (showLoading = false) => {
@@ -230,6 +233,7 @@ export default function ImageTaskDetailPage() {
     ? detail.completedAttachments.find((attachment) => attachment.id === latestSubmissionWithAttachment.submittedAttachmentId) || null
     : null;
   const currentReviewAttachment = submittedAttachment || currentCompletedAttachment;
+  const canApproveReview = canReviewImageTask && Boolean(submittedAttachment);
   const usesLegacyReviewAttachmentFallback = Boolean(currentReviewAttachment && !submittedAttachment);
   const latestRevisionReason = [...detail.reviewHistory]
     .reverse()
@@ -313,6 +317,24 @@ export default function ImageTaskDetailPage() {
     }
   };
 
+  const approveReview = async () => {
+    if (!canApproveReview || approveRunningRef.current) return;
+    approveRunningRef.current = true;
+    setApproveLoading(true);
+    try {
+      await imageTaskApi.approveReview(taskId);
+      await loadDetail(false);
+      window.dispatchEvent(new Event('tianji:dashboard-refresh'));
+      setApproveModalOpen(false);
+      message.success('已审核通过');
+    } catch (requestError) {
+      message.error(getErrorMessage(requestError, '审核通过失败，请稍后重试'));
+    } finally {
+      approveRunningRef.current = false;
+      setApproveLoading(false);
+    }
+  };
+
   return (
     <SecondaryPageShell>
       <SecondaryPageHeader
@@ -346,7 +368,10 @@ export default function ImageTaskDetailPage() {
               ) : <SecondaryEmptyState description="当前提交版本暂时无法确认" />}
             </div>
             <div className={styles.designerActionControls}>
-              <Button danger type="primary" loading={rejectLoading} disabled={rejectLoading} onClick={() => setRejectModalOpen(true)}>
+              <Button type="primary" loading={approveLoading} disabled={!canApproveReview || approveLoading || rejectLoading} onClick={() => setApproveModalOpen(true)}>
+                审核通过
+              </Button>
+              <Button danger loading={rejectLoading} disabled={rejectLoading || approveLoading} onClick={() => setRejectModalOpen(true)}>
                 退回修改
               </Button>
             </div>
@@ -470,6 +495,25 @@ export default function ImageTaskDetailPage() {
 
       <Modal open={Boolean(preview)} title={preview?.title || '附件预览'} footer={null} onCancel={() => setPreview(null)} width={900}>
         {preview?.url ? <Image src={preview.url} alt={preview.title} preview={false} className={styles.previewImage} /> : null}
+      </Modal>
+      <Modal
+        open={approveModalOpen && canApproveReview}
+        title="审核通过"
+        okText="确认通过"
+        cancelText="取消"
+        confirmLoading={approveLoading}
+        okButtonProps={{ disabled: approveLoading }}
+        cancelButtonProps={{ disabled: approveLoading }}
+        maskClosable={!approveLoading}
+        closable={!approveLoading}
+        onCancel={() => {
+          if (approveLoading) return;
+          setApproveModalOpen(false);
+        }}
+        onOk={() => void approveReview()}
+      >
+        <p className={styles.reviewDialogHint}>将审核通过当前提交版本。</p>
+        <p className={styles.approveDialogVersion}>当前版本：附件 #{submittedAttachment?.id}</p>
       </Modal>
       <Modal
         open={rejectModalOpen && canReviewImageTask}
