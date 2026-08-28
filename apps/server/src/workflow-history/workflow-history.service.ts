@@ -26,6 +26,13 @@ export class WorkflowHistoryService {
     this.logger.log(`WorkflowHistory subscribed to ${events.length} events`);
   }
 
+  private resolveOperatorId(event: any): number | null {
+    if (event.name === "image_task.submitted_for_review") return event.designerId ?? null;
+    if (event.name === "image_task.review_approved" || event.name === "image_task.review_rejected") return event.reviewerId ?? null;
+    if (event.name === "workflow.completed") return event.operatorId ?? null;
+    return event.userId || event.approverId || event.designerId || event.creatorId || event.reviewerId || null;
+  }
+
   private async onEvent(event: any) {
     try {
       const taskId = event.taskId;
@@ -36,7 +43,7 @@ export class WorkflowHistoryService {
           eventType: event.name,
           fromState: currentTask?.workflowStatus || null,
           toState: event.name.replace("workflow.", "").toUpperCase(),
-          operatorId: event.userId || event.approverId || event.designerId || event.creatorId || event.reviewerId || null,
+          operatorId: this.resolveOperatorId(event),
           metadata: JSON.stringify(event),
         },
       });

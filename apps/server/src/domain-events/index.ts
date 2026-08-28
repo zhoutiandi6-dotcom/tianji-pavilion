@@ -21,7 +21,7 @@ export class WorkflowRejected {
   get name() { return "workflow.rejected"; }
 }
 export class WorkflowCompleted {
-  constructor(public readonly taskId: number, public readonly serialNumber: string) {}
+  constructor(public readonly taskId: number, public readonly serialNumber: string, public readonly operatorId?: number) {}
   get name() { return "workflow.completed"; }
 }
 export class WorkflowArchived {

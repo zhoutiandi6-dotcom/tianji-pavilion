@@ -231,7 +231,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(prisma.imageTask.updateMany).not.toHaveBeenCalled();
   });
 
-  it.each(["DESIGN_MANAGER", "OWNER", "SUPER_ADMIN"])("allows %s to approve a submitted review", async (role) => {
+  it.each(["DESIGN_MANAGER", "OWNER", "SUPER_ADMIN"])("allows %s to approve a submitted review as the actual reviewer", async (role) => {
     prisma.imageTask.findUnique.mockResolvedValue(imageTask({
       designerId: 7,
       status: "SUBMITTED_FOR_REVIEW",
@@ -243,6 +243,10 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(prisma.imageTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 1, status: "SUBMITTED_FOR_REVIEW", deletedAt: null },
     }));
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      "image_task.review_approved",
+      expect.objectContaining({ reviewerId: 9, designerId: 7 }),
+    );
   });
 
   it("allows only one concurrent approve transition and its review side effects", async () => {
@@ -281,6 +285,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(eventBus.publish.mock.calls.filter((call: any[]) => call[0] === "image_task.review_approved")).toHaveLength(1);
     expect(eventBus.publish.mock.calls.filter((call: any[]) => call[0] === "workflow.completed")).toHaveLength(1);
     expect(eventBus.publish.mock.calls.find((call: any[]) => call[0] === "image_task.review_approved")?.[1]).toMatchObject({ reviewedAttachmentId: 21 });
+    expect(eventBus.publish.mock.calls.find((call: any[]) => call[0] === "workflow.completed")?.[1]).toMatchObject({ operatorId: 9 });
   });
 
   it("makes concurrent approve and reject mutually exclusive", async () => {
@@ -395,7 +400,7 @@ describe("ImageTasksService stage A audit writes", () => {
     );
     expect(eventBus.publish).toHaveBeenCalledWith(
       "workflow.completed",
-      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10" }),
+      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10", operatorId: 9 }),
     );
   });
 
@@ -439,7 +444,7 @@ describe("ImageTasksService stage A audit writes", () => {
     }));
     expect(eventBus.publish).toHaveBeenCalledWith(
       "workflow.completed",
-      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10" }),
+      expect.objectContaining({ taskId: 10, serialNumber: "TJ-10", operatorId: 9 }),
     );
   });
 

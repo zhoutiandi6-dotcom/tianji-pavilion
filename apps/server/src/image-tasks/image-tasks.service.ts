@@ -529,7 +529,7 @@ export class ImageTasksService {
       await this.eventBus.publish(event.name, event);
     }
     for (const { taskId, result } of completedTasks) {
-      const event = new WorkflowCompleted(taskId, result.serialNumber);
+      const event = new WorkflowCompleted(taskId, result.serialNumber, userId);
       await this.eventBus.publish(event.name, event);
     }
     return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
@@ -757,7 +757,7 @@ export class ImageTasksService {
         await this.eventBus.publish(event.name, event);
       }
       if (reviewResult.parentStatus?.enteredDesignApproved) {
-        const event = new WorkflowCompleted(imageTask.taskId, reviewResult.parentStatus.serialNumber);
+        const event = new WorkflowCompleted(imageTask.taskId, reviewResult.parentStatus.serialNumber, userId);
         await this.eventBus.publish(event.name, event);
       }
       return reviewResult.updated;
