@@ -358,14 +358,16 @@ export class ImageTasksService {
       throw new ForbiddenException("仅已通过运营审批且待分配的图片任务可批量分配");
     }
     await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN", dto.weekStart);
-    await this.log.log({
-      userId,
-      action: "batch_assign_designer",
-      targetType: "image_task",
-      targetId: 0,
-      content: `批量分配设计师：${imageTasks.length} 项`,
-      afterValue: { designerId: Number(dto.designerId), imageTaskIds: ids },
-    });
+    if (imageTasks.length > 1) {
+      await this.log.log({
+        userId,
+        action: "batch_assign_designer",
+        targetType: "image_task",
+        targetId: 0,
+        content: `批量分配设计师：${imageTasks.length} 项`,
+        afterValue: { designerId: Number(dto.designerId), imageTaskIds: ids },
+      });
+    }
     return { total: imageTasks.length, successCount: imageTasks.length, failedCount: 0, results: ids.map((id) => ({ id, success: true, message: "已分配" })) };
   }
 
@@ -395,7 +397,7 @@ export class ImageTasksService {
         metadata: JSON.stringify({
           imageTaskId: imageTask.id,
           previousDesignerId: imageTask.designerId ?? null,
-          newDesignerId,
+          designerId: newDesignerId,
           assignedById,
           assignedAt: assignedAt.toISOString(),
           assignmentType,
@@ -463,7 +465,9 @@ export class ImageTasksService {
       : item.status === "NOT_STARTED" && !!item.designerId));
     if (!imageTasks.length) throw new BadRequestException("所选法旨没有可处理的图片任务");
     await this.assignImageTasks(imageTasks, dto.designerId, userId, dto.mode, dto.weekStart, dto.reason?.trim());
-    await this.log.log({ userId, action: "batch_assign_designer", targetType: "task", targetId: 0, content: `批量${dto.mode === "ASSIGN" ? "分配" : "改派"}设计师：${taskIds.length} 条法旨`, afterValue: { taskIds, designerId: dto.designerId, mode: dto.mode } });
+    if (taskIds.length > 1) {
+      await this.log.log({ userId, action: "batch_assign_designer", targetType: "task", targetId: 0, content: `批量${dto.mode === "ASSIGN" ? "分配" : "改派"}设计师：${taskIds.length} 条法旨`, afterValue: { taskIds, designerId: dto.designerId, mode: dto.mode } });
+    }
     return { total: taskIds.length, successCount: taskIds.length, failedCount: 0 };
   }
 

@@ -108,8 +108,7 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(eventBus.publish.mock.calls).toEqual(expect.arrayContaining([
       ["image_task.assigned", expect.objectContaining({ designerId: 7, assignedById: 9 })],
     ]));
-    expect(log.log).toHaveBeenCalledTimes(1);
-    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ action: "batch_assign_designer" }));
+    expect(log.log).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -122,8 +121,46 @@ describe("ImageTasksService stage A audit writes", () => {
 
     const assignmentAudit = prisma.auditEvent.create.mock.calls[0][0].data;
     expect(assignmentAudit).toMatchObject({ action: "assign_designer", operatorId: actorId });
-    expect(JSON.parse(assignmentAudit.metadata)).toMatchObject({ newDesignerId: 7, assignedById: actorId });
+    const metadata = JSON.parse(assignmentAudit.metadata);
+    expect(metadata).toMatchObject({ designerId: 7, assignedById: actorId });
+    expect(metadata).not.toHaveProperty("newDesignerId");
     expect(eventBus.publish).toHaveBeenCalledWith("image_task.assigned", expect.objectContaining({ designerId: 7, assignedById: actorId }));
+    expect(log.log).not.toHaveBeenCalledWith(expect.objectContaining({ action: "batch_assign_designer" }));
+  });
+
+  it("writes one batch summary only when assigning more than one decree", async () => {
+    prisma.task.findMany.mockResolvedValue([
+      { id: 10, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 1 })] },
+      { id: 11, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 2, task: { id: 11, creatorId: 2, workflowStatus: "OPS_APPROVED" } })] },
+    ]);
+
+    await service.batchAssignTasks({ taskIds: [10, 11], designerId: 7, mode: "ASSIGN" }, 9, "DESIGN_MANAGER");
+
+    expect(prisma.auditEvent.create).toHaveBeenCalledTimes(2);
+    for (const [call] of prisma.auditEvent.create.mock.calls) {
+      const metadata = JSON.parse(call.data.metadata);
+      expect(call.data).toMatchObject({ action: "assign_designer", operatorId: 9 });
+      expect(metadata).toMatchObject({ designerId: 7, assignedById: 9 });
+      expect(metadata).not.toHaveProperty("newDesignerId");
+    }
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: "batch_assign_designer",
+      userId: 9,
+      afterValue: expect.objectContaining({ taskIds: [10, 11], designerId: 7 }),
+    }));
+  });
+
+  it("does not write a batch summary when the image-task batch endpoint receives one task", async () => {
+    prisma.imageTask.findMany.mockResolvedValue([imageTask({ id: 1 })]);
+
+    await service.batchAssign({ imageTaskIds: [1], designerId: 7 }, 9, "DESIGN_MANAGER");
+
+    expect(prisma.auditEvent.create).toHaveBeenCalledTimes(1);
+    const assignmentAudit = prisma.auditEvent.create.mock.calls[0][0].data;
+    expect(assignmentAudit).toMatchObject({ action: "assign_designer", operatorId: 9 });
+    expect(JSON.parse(assignmentAudit.metadata)).toMatchObject({ designerId: 7, assignedById: 9 });
+    expect(log.log).not.toHaveBeenCalledWith(expect.objectContaining({ action: "batch_assign_designer" }));
   });
 
   it.each(["DESIGNER", "OPERATION", "OPERATION_MANAGER"])("rejects unauthorized %s batch assignment without audit output", async (role) => {
