@@ -428,14 +428,7 @@ export class ImageTasksService {
       }
     });
     for (const item of imageTasks) {
-      await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(item.id, item.taskId, designerId));
-      await this.log.log({
-        userId,
-        action: mode === "ASSIGN" ? "assign_designer" : "reassign_designer",
-        targetType: "image_task",
-        targetId: item.id,
-        content: `${mode === "ASSIGN" ? "分配" : "改派"}设计师：${item.imageTitle || `#${item.imageIndex}`}`,
-      });
+      await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(item.id, item.taskId, designerId, userId));
     }
   }
 
@@ -735,19 +728,10 @@ export class ImageTasksService {
         return { updated, parentStatus };
       });
       if (dto.designerId && dto.designerId !== imageTask.designerId) {
-        await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(id, imageTask.taskId, dto.designerId));
+        await this.eventBus.publish("image_task.assigned", new ImageTaskAssigned(id, imageTask.taskId, dto.designerId, userId));
       }
       if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId) {
         await this.workflowEngine.recalcTaskStatus(imageTask.taskId);
-      }
-      if (dto.designerId !== undefined && dto.designerId !== imageTask.designerId) {
-        await this.log.log({
-          userId,
-          action: "assign_designer",
-          targetType: "image_task",
-          targetId: id,
-          content: `Assign designer: ${imageTask.imageTitle || `#${imageTask.imageIndex}`}`,
-        });
       }
       if (data.status && data.status !== imageTask.status) {
         await this.log.log({ userId, action: "update_image_task_status", targetType: "image_task", targetId: id, content: `Image task status changed: ${imageTask.status} -> ${data.status}` });

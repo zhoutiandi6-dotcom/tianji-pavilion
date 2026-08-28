@@ -1,4 +1,5 @@
 import {
+  ImageTaskAssigned,
   ImageTaskReviewApproved,
   ImageTaskReviewRejected,
   ImageTaskSubmittedForReview,
@@ -52,5 +53,12 @@ describe("WorkflowHistoryService image review actors", () => {
     const history = await publish(new WorkflowCompleted(10, "TJ-10", 35));
 
     expect(history.operatorId).toBe(35);
+  });
+
+  it("records the actual assignment manager instead of the assignee", async () => {
+    const history = await publish(new ImageTaskAssigned(1, 10, 44, 35, "Main image"));
+
+    expect(history.operatorId).toBe(35);
+    expect(history.operatorId).not.toBe(44);
   });
 });

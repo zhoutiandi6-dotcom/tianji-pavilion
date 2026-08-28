@@ -103,6 +103,35 @@ describe("ImageTasksService stage A audit writes", () => {
       undefined,
     );
     expect(workflowEngine.recalcTaskStatusInTransaction).toHaveBeenCalledWith(prisma, 10);
+    expect(prisma.auditEvent.create).toHaveBeenCalledTimes(2);
+    expect(prisma.auditEvent.create.mock.calls.map(([call]: any[]) => call.data.operatorId)).toEqual([9, 9]);
+    expect(eventBus.publish.mock.calls).toEqual(expect.arrayContaining([
+      ["image_task.assigned", expect.objectContaining({ designerId: 7, assignedById: 9 })],
+    ]));
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({ action: "batch_assign_designer" }));
+  });
+
+  it.each([
+    ["OWNER", 12],
+    ["SUPER_ADMIN", 13],
+  ])("records the actual %s assignment actor instead of the assigned designer", async (role, actorId) => {
+    prisma.task.findMany.mockResolvedValue([{ id: 10, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 1 })] }]);
+
+    await service.batchAssignTasks({ taskIds: [10], designerId: 7, mode: "ASSIGN" }, actorId, role);
+
+    const assignmentAudit = prisma.auditEvent.create.mock.calls[0][0].data;
+    expect(assignmentAudit).toMatchObject({ action: "assign_designer", operatorId: actorId });
+    expect(JSON.parse(assignmentAudit.metadata)).toMatchObject({ newDesignerId: 7, assignedById: actorId });
+    expect(eventBus.publish).toHaveBeenCalledWith("image_task.assigned", expect.objectContaining({ designerId: 7, assignedById: actorId }));
+  });
+
+  it.each(["DESIGNER", "OPERATION", "OPERATION_MANAGER"])("rejects unauthorized %s batch assignment without audit output", async (role) => {
+    await expect(service.batchAssignTasks({ taskIds: [10], designerId: 7, mode: "ASSIGN" }, 8, role)).rejects.toThrow();
+
+    expect(prisma.auditEvent.create).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+    expect(log.log).not.toHaveBeenCalled();
   });
 
   it("writes approvedAt and approvedById only on final approval", async () => {

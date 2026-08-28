@@ -18,7 +18,7 @@ export class AuditEventService {
       "workflow.created", "workflow.submitted", "workflow.withdrawn",
       "workflow.approved", "workflow.rejected", "workflow.completed", "workflow.archived",
       "image_task.started", "image_task.submitted_for_review",
-      "image_task.review_approved", "image_task.review_rejected", "image_task.assigned",
+      "image_task.review_approved", "image_task.review_rejected",
       "task.updated",
     ];
     for (const evt of events) {
@@ -55,7 +55,6 @@ export class AuditEventService {
         "image_task.submitted_for_review": "submit_review",
         "image_task.review_approved": "review_approve",
         "image_task.review_rejected": "review_reject",
-        "image_task.assigned": "assign_designer",
         "task.updated": "edit_task",
       };
 

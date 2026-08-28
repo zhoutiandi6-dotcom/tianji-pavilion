@@ -29,6 +29,7 @@ export class WorkflowHistoryService {
   private resolveOperatorId(event: any): number | null {
     if (event.name === "image_task.submitted_for_review") return event.designerId ?? null;
     if (event.name === "image_task.review_approved" || event.name === "image_task.review_rejected") return event.reviewerId ?? null;
+    if (event.name === "image_task.assigned") return event.assignedById ?? null;
     if (event.name === "workflow.completed") return event.operatorId ?? null;
     return event.userId || event.approverId || event.designerId || event.creatorId || event.reviewerId || null;
   }

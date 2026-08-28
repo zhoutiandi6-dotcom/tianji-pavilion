@@ -1,6 +1,6 @@
 import { AuditEventService } from "./audit-event.service";
 import {
-  ImageTaskReviewApproved,
+  ImageTaskAssigned, ImageTaskReviewApproved,
   ImageTaskReviewRejected,
   ImageTaskSubmittedForReview,
 } from "../../domain-events";
@@ -63,5 +63,10 @@ describe("AuditEventService image review actors", () => {
     );
 
     expect(prisma.auditEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate the transactional assignment audit from the assignment domain event", () => {
+    expect(eventBus.subscribe.mock.calls.some(([name]: [string]) => name === "image_task.assigned")).toBe(false);
+    expect(new ImageTaskAssigned(101, 10, 7, 9)).toMatchObject({ designerId: 7, assignedById: 9 });
   });
 });

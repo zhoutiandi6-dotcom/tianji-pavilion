@@ -45,7 +45,13 @@ export class ImageTaskReviewRejected {
   get name() { return "image_task.review_rejected"; }
 }
 export class ImageTaskAssigned {
-  constructor(public readonly imageTaskId: number, public readonly taskId: number, public readonly designerId: number, public readonly imageTitle?: string) {}
+  constructor(
+    public readonly imageTaskId: number,
+    public readonly taskId: number,
+    public readonly designerId: number,
+    public readonly assignedById: number,
+    public readonly imageTitle?: string,
+  ) {}
   get name() { return "image_task.assigned"; }
 }
 export class TaskUpdated {
