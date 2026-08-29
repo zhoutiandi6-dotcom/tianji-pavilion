@@ -1,6 +1,7 @@
 param([switch]$NoPause)
 
 $ErrorActionPreference = "Continue"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Import-Module (Join-Path $PSScriptRoot "tianji-runtime.psm1") -Force -DisableNameChecking
 
 $mutex = Get-TianjiMutex -Name "launcher"
@@ -10,7 +11,7 @@ if (-not (Enter-TianjiMutex -Mutex $mutex)) {
 }
 
 try {
-  $state = Read-TianjiState
+  $state = Read-TianjiState -Root $root
   if (-not $state) {
     Write-Host "No Tianji runtime state was found. No process was stopped."
     return
@@ -18,13 +19,13 @@ try {
 
   foreach ($entry in @(@("watchdog", $state.watchdog), @("frontend", $state.frontend), @("backend", $state.backend))) {
     $name, $record = $entry
-    if (Stop-TianjiRecordedProcess -Record $record -Label $name) {
+    if (Stop-TianjiRecordedProcess -Record $record -Label $name -Root $root) {
       Write-Host "Stopped Tianji $name process PID $($record.pid)."
     } elseif ($record) {
       Write-Host "Skipped stale or non-owned $name PID $($record.pid)." -ForegroundColor Yellow
     }
   }
-  Remove-TianjiState
+  Remove-TianjiState -Root $root
   Write-Host "Tianji runtime state cleared."
 } finally {
   Exit-TianjiMutex -Mutex $mutex

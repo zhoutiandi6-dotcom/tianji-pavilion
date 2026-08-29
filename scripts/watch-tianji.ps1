@@ -23,7 +23,7 @@ function Restart-WatchedService {
   $restartHistory[$Service] = @($restartHistory[$Service] | Where-Object { $now - $_ -lt $restartWindow })
   if ($restartHistory[$Service].Count -ge $maxRestarts) {
     $State.watchdogStatus = "paused: $Service restart limit reached"
-    Write-TianjiState -State $State
+    Write-TianjiState -State $State -Root $Root
     Write-TianjiWatchdogLog "service=$Service action=paused reason=restart-limit count=$($restartHistory[$Service].Count)"
     return $false
   }
@@ -31,7 +31,7 @@ function Restart-WatchedService {
   $record = $State.$Service
   $oldPid = if ($record) { $record.pid } else { "none" }
   if (Test-TianjiRecordedProcess -Record $record) {
-    Stop-TianjiRecordedProcess -Record $record -Label $Service | Out-Null
+    Stop-TianjiRecordedProcess -Record $record -Label $Service -Root $Root | Out-Null
   }
 
   $port = if ($Service -eq "frontend") { 3000 } else { 3001 }
@@ -47,7 +47,7 @@ function Restart-WatchedService {
     $State.$Service = Start-TianjiServiceProcess -Service $Service -Root $Root
     $restartHistory[$Service] += $now
     $State.watchdogStatus = "running"
-    Write-TianjiState -State $State
+    Write-TianjiState -State $State -Root $Root
     Write-TianjiWatchdogLog "service=$Service action=restarted reason=health-failure oldPid=$oldPid newPid=$($State.$Service.pid) restartCount=$($restartHistory[$Service].Count)"
     return $true
   } catch {
@@ -63,7 +63,7 @@ if (-not (Enter-TianjiMutex -Mutex $mutex)) {
 
 try {
   Initialize-TianjiRuntime
-  $initialState = Read-TianjiState
+  $initialState = Read-TianjiState -Root $Root
   if (-not $initialState -or $initialState.projectRoot -ne $Root) {
     Write-TianjiWatchdogLog "action=exit reason=runtime-state-missing-or-root-changed"
     exit 0
@@ -79,10 +79,10 @@ try {
     processName = $watchdogSnapshot.Name
   }
   $initialState.watchdogStatus = "running"
-  Write-TianjiState -State $initialState
+  Write-TianjiState -State $initialState -Root $Root
   Write-TianjiWatchdogLog "action=started root=$Root pid=$PID"
   while ($true) {
-    $state = Read-TianjiState
+    $state = Read-TianjiState -Root $Root
     if (-not $state -or $state.projectRoot -ne $Root) {
       Write-TianjiWatchdogLog "action=exit reason=runtime-state-missing-or-root-changed"
       break
@@ -118,7 +118,7 @@ try {
     foreach ($logName in @("frontend.out.log", "frontend.err.log", "backend.out.log", "backend.err.log")) {
       Rotate-TianjiLog -Path (Join-Path (Get-TianjiRuntimeDirectory) $logName)
     }
-    Write-TianjiState -State $state
+    Write-TianjiState -State $state -Root $Root
     if ($shouldExit) { break }
     Start-Sleep -Seconds 10
   }

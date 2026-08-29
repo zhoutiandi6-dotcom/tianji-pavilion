@@ -59,7 +59,7 @@ function Start-Or-ReuseTianjiService {
   }
   if ($owned) {
     Write-Host "Restarting unhealthy Tianji $Service service (PID $($record.pid))." -ForegroundColor Yellow
-    Stop-TianjiRecordedProcess -Record $record -Label $Service | Out-Null
+    Stop-TianjiRecordedProcess -Record $record -Label $Service -Root $root | Out-Null
   }
 
   Assert-TianjiPortAvailable -Port $Port -OwnedRecord $null
@@ -128,7 +128,7 @@ try {
   }
   Write-Host "LAN selection: $($network.Selected.IPAddress) on $($network.Selected.InterfaceAlias) ($($network.Reason))."
 
-  $state = Read-TianjiState
+  $state = Read-TianjiState -Root $root
   if (-not $state -or $state.projectRoot -ne $root) { $state = New-TianjiState -Root $root }
   $state.lanIp = $network.Selected.IPAddress
   $state.frontendPort = 3000
@@ -142,7 +142,7 @@ try {
 
   Start-Or-ReuseTianjiService -Service "backend" -Url "http://127.0.0.1:3001/api/health" -Port 3001 -State $state
   Start-Or-ReuseTianjiService -Service "frontend" -Url "http://127.0.0.1:3000/login" -Port 3000 -State $state
-  Write-TianjiState -State $state
+  Write-TianjiState -State $state -Root $root
 
   if (-not (Test-TianjiRecordedProcess -Record $state.watchdog)) {
     $watchdog = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $root "scripts\\watch-tianji.ps1"), "-Root", $root) -PassThru

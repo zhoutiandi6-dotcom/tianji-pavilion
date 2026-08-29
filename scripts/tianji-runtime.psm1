@@ -7,6 +7,18 @@ $script:TianjiLogLimitBytes = 1024KB
 function Get-TianjiRuntimeDirectory { $script:TianjiRuntimeDirectory }
 function Get-TianjiStateFile { $script:TianjiStateFile }
 
+function Get-TianjiDurableStateFile {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $dataConfig = Get-TianjiDataConfiguration -Root $Root
+  return Join-Path $dataConfig.LogsPath "runtime-state.json"
+}
+
+function Get-TianjiLifecycleLogFile {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $dataConfig = Get-TianjiDataConfiguration -Root $Root
+  return Join-Path $dataConfig.LogsPath "launcher-events.jsonl"
+}
+
 function Get-TianjiEnvValue {
   param(
     [Parameter(Mandatory = $true)][string]$Root,
@@ -107,10 +119,11 @@ function Exit-TianjiMutex {
 function New-TianjiState {
   param([Parameter(Mandatory = $true)][string]$Root)
   return [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     launchId = [Guid]::NewGuid().ToString()
     projectRoot = $Root
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
+    updatedAt = $null
     lanIp = $null
     frontendPort = 3000
     backendPort = 3001
@@ -122,27 +135,80 @@ function New-TianjiState {
   }
 }
 
-function Read-TianjiState {
-  if (-not (Test-Path -LiteralPath $script:TianjiStateFile)) { return $null }
+function Read-TianjiStateCandidate {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
   try {
-    return Get-Content -LiteralPath $script:TianjiStateFile -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
   } catch {
-    Write-Warning "Ignoring unreadable Tianji runtime state: $($_.Exception.Message)"
-    Remove-Item -LiteralPath $script:TianjiStateFile -Force -ErrorAction SilentlyContinue
+    Write-Warning "Ignoring unreadable Tianji runtime state at ${Path}: $($_.Exception.Message)"
     return $null
   }
 }
 
+function Write-TianjiJsonAtomically {
+  param([Parameter(Mandatory = $true)]$Value, [Parameter(Mandatory = $true)][string]$Path)
+  $directory = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $temporaryFile = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+  $Value | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $temporaryFile -Encoding utf8
+  Move-Item -LiteralPath $temporaryFile -Destination $Path -Force
+}
+
+function Write-TianjiLifecycleEvent {
+  param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Event)
+  $path = Get-TianjiLifecycleLogFile -Root $Root
+  New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+  Add-Content -LiteralPath $path -Value ($Event | ConvertTo-Json -Compress -Depth 8) -Encoding utf8
+}
+
+function Recover-TianjiStateFromLifecycleLog {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $path = Get-TianjiLifecycleLogFile -Root $Root
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  $records = @{}
+  foreach ($line in Get-Content -LiteralPath $path -ErrorAction SilentlyContinue) {
+    try {
+      $entry = $line | ConvertFrom-Json
+      if ($entry.projectRoot -ne $Root -or -not $entry.service) { continue }
+      if ($entry.action -eq "service-started") { $records[$entry.service] = $entry.record }
+      if ($entry.action -eq "service-stopped") { $records.Remove([string]$entry.service) | Out-Null }
+    } catch { }
+  }
+  if (-not $records.ContainsKey("frontend") -and -not $records.ContainsKey("backend")) { return $null }
+  $state = New-TianjiState -Root $Root
+  $state.frontend = $records["frontend"]
+  $state.backend = $records["backend"]
+  $state.watchdogStatus = "recovered-from-lifecycle-log"
+  return [pscustomobject]$state
+}
+
+function Read-TianjiState {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $candidates = @(@(
+    (Read-TianjiStateCandidate -Path (Get-TianjiDurableStateFile -Root $Root)),
+    (Read-TianjiStateCandidate -Path $script:TianjiStateFile)
+  ) | Where-Object { $_ -and $_.projectRoot -eq $Root })
+  if ($candidates.Count -gt 0) {
+    return $candidates | Sort-Object { if ($_.updatedAt) { [datetime]$_.updatedAt } else { [datetime]::MinValue } } -Descending | Select-Object -First 1
+  }
+  return Recover-TianjiStateFromLifecycleLog -Root $Root
+}
+
 function Write-TianjiState {
-  param([Parameter(Mandatory = $true)]$State)
+  param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Root)
   Initialize-TianjiRuntime
-  $temporaryFile = "$script:TianjiStateFile.$([Guid]::NewGuid().ToString('N')).tmp"
-  $State | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporaryFile -Encoding utf8
-  Move-Item -LiteralPath $temporaryFile -Destination $script:TianjiStateFile -Force
+  $updatedAt = (Get-Date).ToUniversalTime().ToString("o")
+  if ($State -is [System.Collections.IDictionary]) { $State.updatedAt = $updatedAt }
+  else { $State | Add-Member -NotePropertyName updatedAt -NotePropertyValue $updatedAt -Force }
+  Write-TianjiJsonAtomically -Value $State -Path (Get-TianjiDurableStateFile -Root $Root)
+  Write-TianjiJsonAtomically -Value $State -Path $script:TianjiStateFile
 }
 
 function Remove-TianjiState {
+  param([Parameter(Mandatory = $true)][string]$Root)
   Remove-Item -LiteralPath $script:TianjiStateFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Get-TianjiDurableStateFile -Root $Root) -Force -ErrorAction SilentlyContinue
 }
 
 function Get-TianjiPrivateLanCandidates {
@@ -189,11 +255,13 @@ function Get-TianjiProcessSnapshot {
   param([int]$Pid)
   try {
     $process = Get-Process -Id $Pid -ErrorAction Stop
+    $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $Pid" -ErrorAction Stop
     return [pscustomobject]@{
       Pid = $process.Id
       Name = $process.ProcessName
       Path = $process.Path
       StartedAt = $process.StartTime.ToUniversalTime().ToString("o")
+      CommandLine = $cim.CommandLine
     }
   } catch { return $null }
 }
@@ -205,7 +273,12 @@ function Test-TianjiRecordedProcess {
   $recordProcessName = $Record.PSObject.Properties["processName"]
   $expectedProcessName = if ($recordProcessName -and $recordProcessName.Value) { [string]$recordProcessName.Value } else { "node" }
   if (-not $snapshot -or $snapshot.Name -ne $expectedProcessName) { return $false }
-  return $snapshot.StartedAt -eq [string]$Record.startedAt
+  if ($snapshot.StartedAt -ne [string]$Record.startedAt) { return $false }
+  $expectedPath = $Record.PSObject.Properties["executablePath"]
+  if ($expectedPath -and $expectedPath.Value -and $snapshot.Path -ne [string]$expectedPath.Value) { return $false }
+  $expectedCommand = $Record.PSObject.Properties["commandLine"]
+  if ($expectedCommand -and $expectedCommand.Value -and $snapshot.CommandLine -ne [string]$expectedCommand.Value) { return $false }
+  return $true
 }
 
 function Get-TianjiPortOccupant {
@@ -285,18 +358,49 @@ function Start-TianjiServiceProcess {
   Start-Sleep -Milliseconds 250
   $snapshot = Get-TianjiProcessSnapshot -Pid $process.Id
   if (-not $snapshot) { throw "Failed to start Tianji $Service process." }
-  return [pscustomobject]@{ pid = $snapshot.Pid; startedAt = $snapshot.StartedAt; processName = $snapshot.Name }
+  $record = [pscustomobject]@{
+    pid = $snapshot.Pid
+    startedAt = $snapshot.StartedAt
+    processName = $snapshot.Name
+    executablePath = $snapshot.Path
+    commandLine = $snapshot.CommandLine
+    workingDirectory = $workingDirectory
+    service = $Service
+    port = if ($Service -eq "frontend") { 3000 } else { 3001 }
+  }
+  Write-TianjiLifecycleEvent -Root $Root -Event ([pscustomobject]@{
+    at = (Get-Date).ToUniversalTime().ToString("o")
+    action = "service-started"
+    projectRoot = $Root
+    service = $Service
+    record = $record
+  })
+  return $record
 }
 
 function Stop-TianjiRecordedProcess {
-  param($Record, [string]$Label)
+  param($Record, [string]$Label, [string]$Root)
   if (-not (Test-TianjiRecordedProcess -Record $Record)) { return $false }
+  $portProperty = $Record.PSObject.Properties["port"]
+  if ($portProperty -and $portProperty.Value) {
+    $occupant = Get-TianjiPortOccupant -Port ([int]$portProperty.Value)
+    if (-not $occupant -or $occupant.Pid -ne [int]$Record.pid) { return $false }
+  }
   $pid = [int]$Record.pid
   Stop-Process -Id $pid -ErrorAction SilentlyContinue
   $deadline = (Get-Date).AddSeconds(5)
   while ((Get-Date) -lt $deadline -and (Get-Process -Id $pid -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 250 }
   if (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
     Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+  }
+  if ($Root -and $Record.PSObject.Properties["service"] -and $Record.service) {
+    Write-TianjiLifecycleEvent -Root $Root -Event ([pscustomobject]@{
+      at = (Get-Date).ToUniversalTime().ToString("o")
+      action = "service-stopped"
+      projectRoot = $Root
+      service = $Record.service
+      record = $Record
+    })
   }
   return $true
 }
