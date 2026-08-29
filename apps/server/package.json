@@ -9,7 +9,7 @@
     "start": "node dist/main",
     "start:lan": "node dist/main",
     "start:prod": "node dist/main",
-    "lint": "echo 'server lint ok'",
+    "lint": "eslint src --ext .ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "ts-node prisma/seed.ts",

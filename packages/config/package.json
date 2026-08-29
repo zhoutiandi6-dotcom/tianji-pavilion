@@ -4,6 +4,6 @@
   "private": true,
   "main": "./src/index.js",
   "scripts": {
-    "lint": "echo 'config lint ok'"
+    "lint": "eslint --no-error-on-unmatched-pattern src --ext .js,.ts"
   }
 }
