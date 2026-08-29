@@ -26,6 +26,7 @@ function Invoke-Create {
     TIANJI_BACKUP_SOURCE_DATABASE = (Join-Path $sourceRoot "database\tianji.db")
     TIANJI_BACKUP_SOURCE_ATTACHMENTS = $AttachmentsPath
     TIANJI_BACKUP_SOURCE_QUARANTINE = (Join-Path $sourceRoot "quarantine\orphan-attachments")
+    TIANJI_BACKUP_SOURCE_CONFIG = (Join-Path $sourceRoot "configuration\server.env")
     TIANJI_BACKUP_BATCHES_ROOT = $batchesRoot
     TIANJI_BACKUP_BATCH_ID = $BatchId
     TIANJI_BACKUP_GIT_COMMIT = "backup-batch-test"
@@ -62,6 +63,8 @@ New-Item -ItemType Directory -Path $sourceRoot, $batchesRoot -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $fixture "database") -Destination $sourceRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $fixture "uploads") -Destination $sourceRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $fixture "quarantine") -Destination $sourceRoot -Recurse -Force
+New-Item -ItemType Directory -Path (Join-Path $sourceRoot "configuration") -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $sourceRoot "configuration\server.env") -Value "TIANJI_DATA_ROOT=$sourceRoot" -Encoding utf8
 
 $successId = "success-$testId"
 Assert-Condition ((Invoke-Create -BatchId $successId) -eq 0) "successful batch creation"
@@ -88,6 +91,7 @@ $jobs = @(1..2 | ForEach-Object {
     $env:TIANJI_BACKUP_SOURCE_DATABASE = Join-Path $SourceRoot "database\tianji.db"
     $env:TIANJI_BACKUP_SOURCE_ATTACHMENTS = Join-Path $SourceRoot "uploads\attachments"
     $env:TIANJI_BACKUP_SOURCE_QUARANTINE = Join-Path $SourceRoot "quarantine\orphan-attachments"
+    $env:TIANJI_BACKUP_SOURCE_CONFIG = Join-Path $SourceRoot "configuration\server.env"
     $env:TIANJI_BACKUP_BATCHES_ROOT = $BatchesRoot
     $env:TIANJI_BACKUP_BATCH_ID = $BatchId
     $env:TIANJI_BACKUP_GIT_COMMIT = "backup-batch-test"

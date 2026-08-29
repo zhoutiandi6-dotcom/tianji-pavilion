@@ -107,16 +107,21 @@ async function verifyBatch(batchPath: string) {
   const databasePath = join(batchPath, "database", "tianji.db");
   const attachmentsRoot = join(batchPath, "uploads", "attachments");
   const quarantineRoot = join(batchPath, "quarantine", "orphan-attachments");
+  const configurationRoot = join(batchPath, "configuration");
   const database = verifyDatabase(databasePath);
   if (!database.quickCheck.every((value) => value === "ok") || database.foreignKeyCheckCount !== 0) throw new Error("SQLite validation failed for backup batch.");
   assertRelativeAttachmentPaths(database.attachmentPaths);
   const attachments = await inventory(attachmentsRoot);
   const quarantine = await inventory(quarantineRoot);
+  const configuration = await inventory(configurationRoot);
   if ((await sha256(databasePath)) !== manifest.database.sha256) throw new Error("Backup database SHA-256 mismatch.");
   if (attachments.count !== manifest.uploads.count || attachments.bytes !== manifest.uploads.bytes) throw new Error("Backup upload inventory mismatch.");
   if (quarantine.count !== manifest.quarantine.count || quarantine.bytes !== manifest.quarantine.bytes) throw new Error("Backup quarantine inventory mismatch.");
+  if (!manifest.configuration || configuration.count !== manifest.configuration.count || configuration.bytes !== manifest.configuration.bytes) throw new Error("Backup configuration inventory mismatch.");
   const expectedHashes = new Map(manifest.uploads.files.map((file: any) => [file.path, file.sha256]));
   for (const file of attachments.files) if (expectedHashes.get(file.path) !== file.sha256) throw new Error(`Backup upload SHA-256 mismatch: ${file.path}`);
+  const expectedConfigurationHashes = new Map(manifest.configuration.files.map((file: any) => [file.path, file.sha256]));
+  for (const file of configuration.files) if (expectedConfigurationHashes.get(file.path) !== file.sha256) throw new Error(`Backup configuration SHA-256 mismatch: ${file.path}`);
   const attachmentPaths = new Set(attachments.files.map((file) => file.path));
   for (const storagePath of database.attachmentPaths) {
     const relativeAttachmentPath = storagePath.replace(/\\/g, "/").replace(/^attachments\//, "");
@@ -127,6 +132,7 @@ async function verifyBatch(batchPath: string) {
     database: { quickCheck: database.quickCheck, foreignKeyCheckCount: database.foreignKeyCheckCount, coreTableCounts: database.coreTableCounts },
     uploads: { count: attachments.count, bytes: attachments.bytes },
     quarantine: { count: quarantine.count, bytes: quarantine.bytes },
+    configuration: { count: configuration.count, bytes: configuration.bytes },
     result: "ok",
   };
   await writeJson(join(batchPath, "verification.json"), verification);
@@ -137,6 +143,7 @@ async function createBatch() {
   const sourceDatabase = resolve(required("TIANJI_BACKUP_SOURCE_DATABASE"));
   const sourceAttachments = resolve(required("TIANJI_BACKUP_SOURCE_ATTACHMENTS"));
   const sourceQuarantine = resolve(required("TIANJI_BACKUP_SOURCE_QUARANTINE"));
+  const sourceConfiguration = resolve(required("TIANJI_BACKUP_SOURCE_CONFIG"));
   const batchesRoot = resolve(required("TIANJI_BACKUP_BATCHES_ROOT"));
   const batchId = required("TIANJI_BACKUP_BATCH_ID");
   const gitCommit = process.env.TIANJI_BACKUP_GIT_COMMIT?.trim() || "unknown";
@@ -157,6 +164,7 @@ async function createBatch() {
     await mkdir(join(temporaryPath, "database"), { recursive: true });
     await mkdir(join(temporaryPath, "uploads"), { recursive: true });
     await mkdir(join(temporaryPath, "quarantine"), { recursive: true });
+    await mkdir(join(temporaryPath, "configuration"), { recursive: true });
 
     phase = "copy-database";
     const source = new sqlite.DatabaseSync(sourceDatabase, { readOnly: true });
@@ -166,11 +174,14 @@ async function createBatch() {
     phase = "copy-quarantine";
     // Quarantine is archived separately and is never restored into active uploads by default.
     if (await stat(sourceQuarantine).then(() => true).catch(() => false)) await cp(sourceQuarantine, join(temporaryPath, "quarantine", "orphan-attachments"), { recursive: true, force: false, errorOnExist: true });
+    phase = "copy-configuration";
+    await cp(sourceConfiguration, join(temporaryPath, "configuration", "server.env"), { force: false, errorOnExist: true });
 
     phase = "write-manifest";
     const databasePath = join(temporaryPath, "database", "tianji.db");
     const uploads = await inventory(join(temporaryPath, "uploads", "attachments"));
     const quarantine = await inventory(join(temporaryPath, "quarantine", "orphan-attachments"));
+    const configuration = await inventory(join(temporaryPath, "configuration"));
     const manifest: any = {
       manifestVersion,
       batchId,
@@ -183,6 +194,7 @@ async function createBatch() {
       activeAttachmentRecordCount: sourceDatabaseInfo.attachmentPaths.length,
       uploads,
       quarantine,
+      configuration,
       toolVersion: "tianji-backup-batch/1",
       automatic: process.env.TIANJI_BACKUP_AUTOMATIC === "true",
       verification: { status: "pending" },

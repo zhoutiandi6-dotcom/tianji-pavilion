@@ -112,6 +112,7 @@ try {
     TIANJI_BACKUP_SOURCE_DATABASE = $dataConfig.DatabasePath
     TIANJI_BACKUP_SOURCE_ATTACHMENTS = $dataConfig.AttachmentsPath
     TIANJI_BACKUP_SOURCE_QUARANTINE = (Join-Path $dataConfig.QuarantinePath "orphan-attachments")
+    TIANJI_BACKUP_SOURCE_CONFIG = (Join-Path $root "apps\server\.env")
     TIANJI_BACKUP_BATCHES_ROOT = $batchesRoot
     TIANJI_BACKUP_BATCH_ID = $batchId
     TIANJI_BACKUP_GIT_COMMIT = $gitCommit

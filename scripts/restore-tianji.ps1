@@ -44,7 +44,7 @@ try {
   $manifest = Get-Content -LiteralPath (Join-Path $stage "manifest.json") -Raw | ConvertFrom-Json
   Write-Host "Restore batch: $($manifest.batchId)" -ForegroundColor Yellow
   Write-Host "Created: $($manifest.createdAt) | Commit: $($manifest.gitCommit)"
-  Write-Host "Database: $($manifest.database.size) bytes | Attachments: $($manifest.uploads.count) files / $($manifest.uploads.bytes) bytes"
+  Write-Host "Database: $($manifest.database.size) bytes | Attachments: $($manifest.uploads.count) files / $($manifest.uploads.bytes) bytes | Configuration: $($manifest.configuration.count) files"
 
   & (Join-Path $PSScriptRoot "stop-tianji.ps1") -NoPause
   foreach ($port in 3000, 3001) {
