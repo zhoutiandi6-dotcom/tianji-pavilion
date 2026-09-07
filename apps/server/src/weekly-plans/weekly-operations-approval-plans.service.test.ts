@@ -54,12 +54,16 @@ describe("WeeklyOperationsApprovalPlansService", () => {
     expect(prisma.weeklyOperationsApprovalPlanItem.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({ sourceType: "MIDWEEK_ADDITION" })] });
   });
 
-  it("auto-adds an approved decree in the same transaction with AUTO_ADDITION", async () => {
+  it("offers approved decrees as candidates for manual current-week addition", async () => {
     prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
-    prisma.imageTask.count.mockResolvedValue(6);
-    const result = await service.ensureAutoAddedInTransaction(prisma, 11, 9, new Date());
-    expect(result).toEqual(expect.objectContaining({ added: true, imageCount: 6 }));
-    expect(prisma.weeklyOperationsApprovalPlanItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ decreeId: 11, sourceType: "AUTO_ADDITION", plannedImageCountSnapshot: 6 }) });
+    prisma.task.findMany.mockResolvedValue([{ id: 11, serialNumber: "TJ-11", workflowStatus: "OPS_APPROVED", imageTasks: [{ id: 1 }], creator: {}, store: null, requirementType: null, submissionRecords: [] }]);
+
+    const result = await service.listCandidates(9, "OPERATION_MANAGER", currentWeekStart());
+
+    expect(result.items).toEqual([expect.objectContaining({ id: 11, workflowStatus: "OPS_APPROVED" })]);
+    expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] } }),
+    }));
   });
 
   it("refreshes pending item snapshots and writes an audit event when effective image count changes", async () => {

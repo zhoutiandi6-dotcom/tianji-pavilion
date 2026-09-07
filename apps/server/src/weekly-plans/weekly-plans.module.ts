@@ -5,10 +5,11 @@ import { WeeklyDesignerPlansController } from "./weekly-designer-plans.controlle
 import { WeeklyDesignerPlansService } from "./weekly-designer-plans.service";
 import { WeeklyOperationsApprovalPlansController } from "./weekly-operations-approval-plans.controller";
 import { WeeklyOperationsApprovalPlansService } from "./weekly-operations-approval-plans.service";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 
 @Module({
   controllers: [WeeklyPlansController, WeeklyDesignerPlansController, WeeklyOperationsApprovalPlansController],
-  providers: [WeeklyPlansService, WeeklyDesignerPlansService, WeeklyOperationsApprovalPlansService],
+  providers: [WeeklyPlansService, WeeklyDesignerPlansService, WeeklyOperationsApprovalPlansService, TaskVisibilityService],
   exports: [WeeklyPlansService, WeeklyDesignerPlansService, WeeklyOperationsApprovalPlansService],
 })
 export class WeeklyPlansModule {}

@@ -4,7 +4,7 @@ import { formatShanghaiDate, getShanghaiWeekRange, getShanghaiWeekRangeForWeekSt
 import { WEEKLY_OPERATIONS_APPROVAL_MANAGER_ROLES } from "./weekly-plan.constants";
 
 type WeekRange = { start: Date; end: Date };
-type SourceType = "INITIAL_PLAN" | "MIDWEEK_ADDITION" | "AUTO_ADDITION";
+type SourceType = "INITIAL_PLAN" | "MIDWEEK_ADDITION";
 
 const ACTIVE_IMAGE_WHERE = { deletedAt: null, status: { not: "CANCELLED" } };
 
@@ -33,8 +33,7 @@ export class WeeklyOperationsApprovalPlansService {
     }
   }
 
-  private sourceFor(range: WeekRange, activeCount: number, automatic = false): SourceType {
-    if (automatic) return "AUTO_ADDITION";
+  private sourceFor(range: WeekRange, activeCount: number): SourceType {
     const current = getShanghaiWeekRange();
     return activeCount === 0 || range.start.getTime() > current.start.getTime() ? "INITIAL_PLAN" : "MIDWEEK_ADDITION";
   }
@@ -85,7 +84,7 @@ export class WeeklyOperationsApprovalPlansService {
       this.prisma.weeklyOperationsApprovalPlan.findUnique({ where: { managerId_weekStart: { managerId: userId, weekStart: range.start } } }),
       this.prisma.weeklyOperationsApprovalPlanItem.findMany({ where: { removedAt: null }, select: { decreeId: true } }),
       this.prisma.task.findMany({
-        where: { workflowStatus: "SUBMITTED", deletedAt: null },
+        where: { workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] }, deletedAt: null },
         include: {
           store: { select: { name: true } },
           requirementType: { select: { name: true } },
@@ -128,9 +127,9 @@ export class WeeklyOperationsApprovalPlansService {
       const [existingOnPlan, activeMemberships, decrees] = await Promise.all([
         tx.weeklyOperationsApprovalPlanItem.findMany({ where: { planId: plan.id, decreeId: { in: decreeIds } }, select: { decreeId: true } }),
         tx.weeklyOperationsApprovalPlanItem.findMany({ where: { decreeId: { in: decreeIds }, removedAt: null }, select: { decreeId: true, planId: true } }),
-        tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: "SUBMITTED", deletedAt: null }, select: { id: true, serialNumber: true } }),
+        tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] }, deletedAt: null }, select: { id: true, serialNumber: true } }),
       ]);
-      if (decrees.length !== decreeIds.length) throw new BadRequestException("Only pending operations approvals can be added to a plan");
+      if (decrees.length !== decreeIds.length) throw new BadRequestException("Only pending or approved operations decrees can be added to a plan");
       if (existingOnPlan.length || activeMemberships.length) throw new ConflictException("One or more decrees are already in an active weekly approval plan");
       const activeCount = await tx.weeklyOperationsApprovalPlanItem.count({ where: { planId: plan.id, removedAt: null } });
       const sourceType = this.sourceFor(range, activeCount);
@@ -227,18 +226,6 @@ export class WeeklyOperationsApprovalPlansService {
       });
       return { itemId: destination.id, fromWeekStart: formatShanghaiDate(item.plan.weekStart), toWeekStart: formatShanghaiDate(targetRange.start), movedAt };
     });
-  }
-
-  async ensureAutoAddedInTransaction(tx: any, decreeId: number, managerId: number, approvedAt: Date) {
-    const range = getShanghaiWeekRange(approvedAt);
-    const activeMembership = await tx.weeklyOperationsApprovalPlanItem.findFirst({ where: { decreeId, removedAt: null }, select: { id: true, planId: true } });
-    if (activeMembership) return { added: false, reason: "already_planned" };
-    const { plan } = await this.getOrCreatePlan(tx, range, managerId, managerId);
-    const imageCount = await this.activeImageCount(tx, decreeId);
-    if (!imageCount) throw new BadRequestException("Decree has no active image tasks");
-    const item = await tx.weeklyOperationsApprovalPlanItem.create({ data: { planId: plan.id, decreeId, plannedImageCountSnapshot: imageCount, sourceType: "AUTO_ADDITION", addedById: managerId } });
-    await tx.auditEvent.create({ data: { resourceType: "weekly_operations_approval_plan", resourceId: plan.id, action: "weekly_operations_approval_plan_item_auto_added", operatorId: managerId, metadata: JSON.stringify({ itemId: item.id, decreeId, imageCount, approvedAt }) } });
-    return { added: true, planId: plan.id, itemId: item.id, imageCount };
   }
 
   /**

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 import { formatShanghaiDate, getShanghaiWeekRange, getShanghaiWeekRangeForWeekStart } from "../common/shanghai-time";
 import { FINAL_IMAGE_TASK_STATUSES, WEEKLY_PLAN_DESIGNER_ROLE, WEEKLY_PLAN_ITEM_STATUS, WEEKLY_PLAN_MANAGER_ROLES } from "./weekly-plan.constants";
 
@@ -7,7 +8,10 @@ type WeekRange = { start: Date; end: Date };
 
 @Injectable()
 export class WeeklyDesignerPlansService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly visibility: TaskVisibilityService,
+  ) {}
 
   private assertReadable(role: string) {
     if (![...WEEKLY_PLAN_MANAGER_ROLES, WEEKLY_PLAN_DESIGNER_ROLE].includes(role)) {
@@ -204,9 +208,10 @@ export class WeeklyDesignerPlansService {
     this.assertManager(role);
     const tasks = await this.prisma.task.findMany({
       where: {
-        deletedAt: null,
-        workflowStatus: "OPS_APPROVED",
-        imageTasks: { some: { deletedAt: null } },
+        AND: [
+          this.visibility.designAssignmentWhere(role, _userId),
+          { imageTasks: { some: { deletedAt: null } } },
+        ],
       },
       include: { store: { select: { name: true } }, requirementType: { select: { name: true } }, creator: { select: { displayName: true, username: true } }, imageTasks: { where: { deletedAt: null }, select: { id: true, status: true, designerId: true } } },
       orderBy: { updatedAt: "asc" },

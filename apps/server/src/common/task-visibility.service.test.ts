@@ -1,5 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
-import { DESIGN_UNFINISHED_IMAGE_STATUSES, TaskVisibilityService } from "./task-visibility.service";
+import { currentOperationsApprovalPlanMembershipWhere, DESIGN_UNFINISHED_IMAGE_STATUSES, TaskVisibilityService } from "./task-visibility.service";
 
 describe("TaskVisibilityService", () => {
   const service = new TaskVisibilityService();
@@ -28,6 +28,21 @@ describe("TaskVisibilityService", () => {
 
   it("rejects non design managers from design manager scopes", () => {
     expect(() => service.scopeWhere("design-reviews", "DESIGNER", 9)).toThrow(ForbiddenException);
+  });
+
+  it("gates OPS_APPROVED design-manager visibility on the current operations plan", () => {
+    expect(service.visibleWhere("DESIGN_MANAGER", 4)).toEqual(expect.objectContaining({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          OR: expect.arrayContaining([
+            expect.objectContaining({
+              workflowStatus: "OPS_APPROVED",
+              weeklyOperationsApprovalPlanItems: currentOperationsApprovalPlanMembershipWhere(),
+            }),
+          ]),
+        }),
+      ]),
+    }));
   });
 
   it("allows designers to query only their assigned design-task scope", () => {

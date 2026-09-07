@@ -24,6 +24,7 @@ import {
 } from "./image-task-review-history";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
+import { currentOperationsApprovalPlanMembershipWhere } from "../common/task-visibility.service";
 import {
   ImageTaskDetailAttachmentDto,
   ImageTaskDetailDto,
@@ -98,9 +99,14 @@ export class ImageTasksService {
     if (ADMIN_ROLES.includes(userRole)) return true;
     if (userRole === "OPERATION") return task.creatorId === userId;
     if (userRole === "OPERATION_MANAGER") return task.workflowStatus !== "DRAFT";
-    if (userRole === "DESIGN_MANAGER") return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus);
+    if (userRole === "DESIGN_MANAGER") {
+      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus)
+        && (task.workflowStatus !== "OPS_APPROVED" || task.weeklyOperationsApprovalPlanItems?.length > 0);
+    }
     if (userRole === "DESIGNER") {
-      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus) && task.imageTasks?.some((it: any) => it.designerId === userId);
+      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus)
+        && (task.workflowStatus !== "OPS_APPROVED" || task.weeklyOperationsApprovalPlanItems?.length > 0)
+        && task.imageTasks?.some((it: any) => it.designerId === userId);
     }
     return false;
   }
@@ -108,7 +114,10 @@ export class ImageTasksService {
   async findByTask(taskId: number, userId: number, userRole: string) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      include: { imageTasks: { select: { designerId: true } } },
+      include: {
+        imageTasks: { select: { designerId: true } },
+        weeklyOperationsApprovalPlanItems: { where: currentOperationsApprovalPlanMembershipWhere().some, select: { id: true } },
+      },
     });
     if (!task) throw new NotFoundException("Task not found");
     if (!this.canViewTask(task, userId, userRole)) throw new ForbiddenException("No permission to view image tasks");
@@ -218,6 +227,7 @@ export class ImageTasksService {
             store: { select: { id: true, name: true } },
             requirementType: { select: { id: true, name: true } },
             imageTasks: { select: { designerId: true } },
+            weeklyOperationsApprovalPlanItems: { where: currentOperationsApprovalPlanMembershipWhere().some, select: { id: true } },
           },
         },
       },
@@ -357,6 +367,7 @@ export class ImageTasksService {
     if (imageTasks.some((item) => item.task.workflowStatus !== "OPS_APPROVED" || item.designerId || item.status !== "PENDING_ASSIGNMENT")) {
       throw new ForbiddenException("仅已通过运营审批且待分配的图片任务可批量分配");
     }
+    await this.assertCurrentOperationsPlanAdmission(imageTasks.map((item) => item.taskId));
     await this.assignImageTasks(imageTasks, Number(dto.designerId), userId, "ASSIGN", dto.weekStart);
     if (imageTasks.length > 1) {
       await this.log.log({
@@ -377,6 +388,21 @@ export class ImageTasksService {
     });
     if (!designer) throw new BadRequestException("设计师不存在、未启用或角色不正确");
     return designer;
+  }
+
+  private async assertCurrentOperationsPlanAdmission(taskIds: number[]) {
+    const uniqueTaskIds = [...new Set(taskIds)];
+    const admitted = await this.prisma.task.count({
+      where: {
+        id: { in: uniqueTaskIds },
+        deletedAt: null,
+        workflowStatus: "OPS_APPROVED",
+        weeklyOperationsApprovalPlanItems: currentOperationsApprovalPlanMembershipWhere(),
+      },
+    });
+    if (admitted !== uniqueTaskIds.length) {
+      throw new ForbiddenException("法旨尚未加入当前运营主管本周计划，暂不可分配设计师");
+    }
   }
 
   private createAssignmentAudit(
@@ -442,6 +468,7 @@ export class ImageTasksService {
     if (tasks.length !== taskIds.length) throw new NotFoundException("存在法旨不存在或已删除");
     const expectedWorkflow = dto.mode === "ASSIGN" ? "OPS_APPROVED" : "DESIGN_ASSIGNED";
     if (tasks.some((task) => task.workflowStatus !== expectedWorkflow)) throw new ForbiddenException("所选法旨的状态不满足本次批量操作");
+    if (dto.mode === "ASSIGN") await this.assertCurrentOperationsPlanAdmission(taskIds);
     const invalidTask = tasks.find((task) => {
       if (!task.imageTasks.length) return true;
       if (dto.mode === "ASSIGN") return task.imageTasks.some((item) => item.status !== "PENDING_ASSIGNMENT" || !!item.designerId);
@@ -671,6 +698,7 @@ export class ImageTasksService {
           throw new ForbiddenException("仅待分配任务可分配、仅已分配未开始任务可改派");
         }
         assignmentType = imageTask.designerId ? "REASSIGN" : "INITIAL";
+        if (assignmentType === "INITIAL") await this.assertCurrentOperationsPlanAdmission([imageTask.taskId]);
         assignedAt = new Date();
         data.designerId = dto.designerId;
         data.assignedAt = assignedAt;

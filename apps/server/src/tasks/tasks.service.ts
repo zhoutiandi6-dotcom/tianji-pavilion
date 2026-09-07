@@ -283,7 +283,7 @@ export class TasksService {
     }
 
     const task = await this.prisma.task.findFirst({
-      where: { id, deletedAt: null },
+      where: { AND: [{ id, deletedAt: null }, this.visibility.visibleWhere(userRole, userId)] },
       include: {
         creator: { select: { id: true, username: true, displayName: true } },
         store: { select: { id: true, name: true } },
@@ -304,8 +304,7 @@ export class TasksService {
         },
       },
     });
-    if (!task) throw new NotFoundException("法旨不存在");
-    if (!this.canView(task, userRole, userId)) throw new ForbiddenException("无权查看该法旨");
+    if (!task) throw new NotFoundException("法旨不存在或无权查看");
     const auditEvents = await this.prisma.auditEvent.findMany({
       where: { resourceType: "task", resourceId: id },
       orderBy: { createdAt: "desc" },

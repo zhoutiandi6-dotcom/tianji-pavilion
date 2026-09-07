@@ -42,7 +42,10 @@ describe("ImageTasksService stage A audit writes", () => {
         findFirst: jest.fn().mockResolvedValue({ id: 7 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      task: { findMany: jest.fn() },
+      task: {
+        findMany: jest.fn(),
+        count: jest.fn().mockImplementation(({ where }: any) => where.id.in.length),
+      },
       imageTask: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -109,6 +112,15 @@ describe("ImageTasksService stage A audit writes", () => {
       ["image_task.assigned", expect.objectContaining({ designerId: 7, assignedById: 9 })],
     ]));
     expect(log.log).not.toHaveBeenCalled();
+  });
+
+  it("rejects assignment before the approved decree enters the current operations plan", async () => {
+    prisma.task.findMany.mockResolvedValue([{ id: 10, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 1 })] }]);
+    prisma.task.count.mockResolvedValue(0);
+
+    await expect(service.batchAssignTasks({ taskIds: [10], designerId: 7, mode: "ASSIGN" }, 9, "DESIGN_MANAGER"))
+      .rejects.toThrow("尚未加入当前运营主管本周计划");
+    expect(prisma.imageTask.update).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable } from "@nestjs/common";
+import { getShanghaiWeekRange } from "./shanghai-time";
 
 export const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
 export const DESIGN_VISIBLE_STATUSES = [
@@ -19,6 +20,17 @@ export const DESIGN_UNFINISHED_IMAGE_STATUSES = [
   "REVISION_REQUIRED",
 ];
 
+/** The active operations-manager plan is the gate into design assignment. */
+export function currentOperationsApprovalPlanMembershipWhere(at = new Date()) {
+  const range = getShanghaiWeekRange(at);
+  return {
+    some: {
+      removedAt: null,
+      plan: { weekStart: range.start, weekEnd: range.end },
+    },
+  };
+}
+
 @Injectable()
 export class TaskVisibilityService {
   isAdmin(role?: string) {
@@ -33,7 +45,20 @@ export class TaskVisibilityService {
       return { ...activeWhere, workflowStatus: { in: OPERATION_MANAGER_VISIBLE_STATUSES } };
     }
     if (role === "DESIGN_MANAGER") {
-      return { ...activeWhere, workflowStatus: { in: DESIGN_VISIBLE_STATUSES } };
+      return {
+        AND: [
+          activeWhere,
+          {
+            OR: [
+              { workflowStatus: { in: DESIGN_VISIBLE_STATUSES.filter((status) => status !== "OPS_APPROVED") } },
+              {
+                workflowStatus: "OPS_APPROVED",
+                weeklyOperationsApprovalPlanItems: currentOperationsApprovalPlanMembershipWhere(),
+              },
+            ],
+          },
+        ],
+      };
     }
     if (role === "DESIGNER") {
       return {

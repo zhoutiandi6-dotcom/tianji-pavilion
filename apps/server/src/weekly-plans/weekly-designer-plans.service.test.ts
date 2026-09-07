@@ -1,5 +1,6 @@
 import { ForbiddenException } from "@nestjs/common";
 import { formatShanghaiDate, getShanghaiWeekRange } from "../common/shanghai-time";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 import { WeeklyDesignerPlansService } from "./weekly-designer-plans.service";
 
 describe("WeeklyDesignerPlansService", () => {
@@ -43,7 +44,7 @@ describe("WeeklyDesignerPlansService", () => {
       task: { findMany: jest.fn().mockResolvedValue([]) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
-    service = new WeeklyDesignerPlansService(prisma);
+    service = new WeeklyDesignerPlansService(prisma, new TaskVisibilityService());
   });
 
   it("aggregates designer planning solely from weekly plan items and image tasks", async () => {
