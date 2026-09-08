@@ -79,6 +79,13 @@ try {
     processName = $watchdogSnapshot.Name
   }
   $initialState.watchdogStatus = "running"
+  Write-TianjiLifecycleEvent -Root $Root -Event ([pscustomobject]@{
+    at = (Get-Date).ToUniversalTime().ToString("o")
+    action = "service-started"
+    projectRoot = $Root
+    service = "watchdog"
+    record = $initialState.watchdog
+  })
   Write-TianjiState -State $initialState -Root $Root
   Write-TianjiWatchdogLog "action=started root=$Root pid=$PID"
   while ($true) {

@@ -119,7 +119,7 @@ function Exit-TianjiMutex {
 function New-TianjiState {
   param([Parameter(Mandatory = $true)][string]$Root)
   return [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     launchId = [Guid]::NewGuid().ToString()
     projectRoot = $Root
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -135,11 +135,53 @@ function New-TianjiState {
   }
 }
 
+function Convert-TianjiTimestampToIsoUtc {
+  param($Value)
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [datetimeoffset]) { return $Value.UtcDateTime.ToString("o") }
+  if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString("o") }
+
+  $raw = [string]$Value
+  $parsed = [datetimeoffset]::MinValue
+  if ([datetimeoffset]::TryParse($raw, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    return $parsed.UtcDateTime.ToString("o")
+  }
+  return $raw
+}
+
+function Set-TianjiTimestampProperty {
+  param($Object, [Parameter(Mandatory = $true)][string]$Name)
+  if ($null -eq $Object) { return }
+  if ($Object -is [System.Collections.IDictionary]) {
+    if ($Object.Contains($Name) -and $null -ne $Object[$Name]) { $Object[$Name] = Convert-TianjiTimestampToIsoUtc $Object[$Name] }
+    return
+  }
+  $property = $Object.PSObject.Properties[$Name]
+  if ($property -and $null -ne $property.Value) { $property.Value = Convert-TianjiTimestampToIsoUtc $property.Value }
+}
+
+function Normalize-TianjiServiceRecordTimestamps {
+  param($Record)
+  Set-TianjiTimestampProperty -Object $Record -Name "startedAt"
+}
+
+function Normalize-TianjiStateTimestamps {
+  param($State)
+  Set-TianjiTimestampProperty -Object $State -Name "startedAt"
+  Set-TianjiTimestampProperty -Object $State -Name "updatedAt"
+  foreach ($service in @("frontend", "backend", "watchdog")) {
+    if ($State -is [System.Collections.IDictionary]) { $record = $State[$service] } else { $record = $State.$service }
+    Normalize-TianjiServiceRecordTimestamps -Record $record
+  }
+}
+
 function Read-TianjiStateCandidate {
   param([Parameter(Mandatory = $true)][string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
   try {
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Normalize-TianjiStateTimestamps -State $state
+    return $state
   } catch {
     Write-Warning "Ignoring unreadable Tianji runtime state at ${Path}: $($_.Exception.Message)"
     return $null
@@ -159,6 +201,9 @@ function Write-TianjiLifecycleEvent {
   param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Event)
   $path = Get-TianjiLifecycleLogFile -Root $Root
   New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+  Set-TianjiTimestampProperty -Object $Event -Name "at"
+  if ($Event -is [System.Collections.IDictionary]) { $record = $Event["record"] } else { $record = $Event.record }
+  Normalize-TianjiServiceRecordTimestamps -Record $record
   Add-Content -LiteralPath $path -Value ($Event | ConvertTo-Json -Compress -Depth 8) -Encoding utf8
 }
 
@@ -171,16 +216,68 @@ function Recover-TianjiStateFromLifecycleLog {
     try {
       $entry = $line | ConvertFrom-Json
       if ($entry.projectRoot -ne $Root -or -not $entry.service) { continue }
-      if ($entry.action -eq "service-started") { $records[$entry.service] = $entry.record }
+      if ($entry.action -eq "service-started") {
+        Normalize-TianjiServiceRecordTimestamps -Record $entry.record
+        $records[$entry.service] = $entry.record
+      }
       if ($entry.action -eq "service-stopped") { $records.Remove([string]$entry.service) | Out-Null }
     } catch { }
   }
-  if (-not $records.ContainsKey("frontend") -and -not $records.ContainsKey("backend")) { return $null }
+  if (-not $records.ContainsKey("frontend") -and -not $records.ContainsKey("backend") -and -not $records.ContainsKey("watchdog")) { return $null }
   $state = New-TianjiState -Root $Root
   $state.frontend = $records["frontend"]
   $state.backend = $records["backend"]
+  $state.watchdog = $records["watchdog"]
   $state.watchdogStatus = "recovered-from-lifecycle-log"
   return [pscustomobject]$state
+}
+
+function Recover-TianjiLegacyWatchdogRecord {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $log = Join-Path (Get-TianjiRuntimeDirectory) "watchdog.log"
+  if (-not (Test-Path -LiteralPath $log)) { return $null }
+  $escapedRoot = [regex]::Escape($Root)
+  $match = Get-Content -LiteralPath $log -ErrorAction SilentlyContinue |
+    Select-String -Pattern "^(?<at>\S+) action=started root=$escapedRoot pid=(?<pid>\d+)$" |
+    Select-Object -Last 1
+  if (-not $match) { return $null }
+  $snapshot = Get-TianjiProcessSnapshot -Pid ([int]$match.Matches[0].Groups["pid"].Value)
+  if (-not $snapshot -or $snapshot.Name -ne "powershell") { return $null }
+  $watchScript = Join-Path $Root "scripts\\watch-tianji.ps1"
+  if ($snapshot.CommandLine -notmatch [regex]::Escape($watchScript) -or $snapshot.CommandLine -notmatch "-Root\s+$escapedRoot") { return $null }
+  $loggedAt = Convert-TianjiTimestampToIsoUtc $match.Matches[0].Groups["at"].Value
+  $delta = [math]::Abs(([datetimeoffset]$snapshot.StartedAt - [datetimeoffset]$loggedAt).TotalMinutes)
+  if ($delta -gt 2) { return $null }
+  return [pscustomobject]@{
+    pid = $snapshot.Pid
+    startedAt = $snapshot.StartedAt
+    processName = $snapshot.Name
+    executablePath = $snapshot.Path
+    commandLine = $snapshot.CommandLine
+    workingDirectory = (Split-Path -Parent $watchScript)
+    service = "watchdog"
+  }
+}
+
+function Repair-TianjiStateOwnership {
+  param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Root)
+  $fromLifecycle = Recover-TianjiStateFromLifecycleLog -Root $Root
+  foreach ($service in @("frontend", "backend", "watchdog")) {
+    $record = $State.$service
+    if (Test-TianjiRecordedProcess -Record $record) { continue }
+    $candidate = if ($fromLifecycle) { $fromLifecycle.$service } else { $null }
+    if (Test-TianjiRecordedProcess -Record $candidate) {
+      $State | Add-Member -NotePropertyName $service -NotePropertyValue $candidate -Force
+    }
+  }
+  if (-not (Test-TianjiRecordedProcess -Record $State.watchdog)) {
+    $watchdog = Recover-TianjiLegacyWatchdogRecord -Root $Root
+    if (Test-TianjiRecordedProcess -Record $watchdog) {
+      $State | Add-Member -NotePropertyName "watchdog" -NotePropertyValue $watchdog -Force
+      $State | Add-Member -NotePropertyName "watchdogStatus" -NotePropertyValue "recovered-from-watchdog-log" -Force
+    }
+  }
+  return $State
 }
 
 function Read-TianjiState {
@@ -190,14 +287,18 @@ function Read-TianjiState {
     (Read-TianjiStateCandidate -Path $script:TianjiStateFile)
   ) | Where-Object { $_ -and $_.projectRoot -eq $Root })
   if ($candidates.Count -gt 0) {
-    return $candidates | Sort-Object { if ($_.updatedAt) { [datetime]$_.updatedAt } else { [datetime]::MinValue } } -Descending | Select-Object -First 1
+    $state = $candidates | Sort-Object { if ($_.updatedAt) { [datetime]$_.updatedAt } else { [datetime]::MinValue } } -Descending | Select-Object -First 1
+    return Repair-TianjiStateOwnership -State $state -Root $Root
   }
-  return Recover-TianjiStateFromLifecycleLog -Root $Root
+  $recovered = Recover-TianjiStateFromLifecycleLog -Root $Root
+  if (-not $recovered) { return $null }
+  return Repair-TianjiStateOwnership -State $recovered -Root $Root
 }
 
 function Write-TianjiState {
   param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Root)
   Initialize-TianjiRuntime
+  Normalize-TianjiStateTimestamps -State $State
   $updatedAt = (Get-Date).ToUniversalTime().ToString("o")
   if ($State -is [System.Collections.IDictionary]) { $State.updatedAt = $updatedAt }
   else { $State | Add-Member -NotePropertyName updatedAt -NotePropertyValue $updatedAt -Force }

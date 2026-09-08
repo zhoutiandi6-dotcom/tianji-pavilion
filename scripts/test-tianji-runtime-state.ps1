@@ -43,6 +43,7 @@ try {
   Remove-Item -LiteralPath $temporary -Force
   $fromDurable = Read-TianjiState -Root $projectRoot
   Assert-Condition ($fromDurable.backend.pid -eq 424242) "durable state recovers a missing temporary state"
+  Assert-Condition ($fromDurable.backend.startedAt -eq "2026-01-01T00:00:00.0000000Z") "durable state preserves ISO timestamp precision"
 
   Remove-Item -LiteralPath $durable -Force
   Write-TianjiLifecycleEvent -Root $projectRoot -Event ([pscustomobject]@{
@@ -54,6 +55,39 @@ try {
   })
   $fromLifecycle = Read-TianjiState -Root $projectRoot
   Assert-Condition ($fromLifecycle.backend.pid -eq 424242) "lifecycle log recovers a missing runtime state"
+  Assert-Condition ($fromLifecycle.backend.startedAt -eq "2026-01-01T00:00:00.0000000Z") "lifecycle recovery preserves ISO timestamp precision"
+
+  $snapshot = Get-TianjiProcessSnapshot -Pid $PID
+  $ownedRecord = [pscustomobject]@{
+    pid = $snapshot.Pid
+    startedAt = $snapshot.StartedAt
+    processName = $snapshot.Name
+    executablePath = $snapshot.Path
+    commandLine = $snapshot.CommandLine
+  }
+  Assert-Condition (Test-TianjiRecordedProcess -Record $ownedRecord) "matching PID, timestamp, path, and command identify the recorded process"
+  $reusedPidRecord = $ownedRecord | Select-Object *
+  $reusedPidRecord.startedAt = ([datetimeoffset]$snapshot.StartedAt).AddSeconds(-1).ToString("o")
+  Assert-Condition (-not (Test-TianjiRecordedProcess -Record $reusedPidRecord)) "a reused PID with a different start time is rejected"
+  $foreignCommandRecord = $ownedRecord | Select-Object *
+  $foreignCommandRecord.commandLine = "node unrelated-service.js"
+  Assert-Condition (-not (Test-TianjiRecordedProcess -Record $foreignCommandRecord)) "a process with a mismatched command is rejected"
+
+  $foreignNode = Start-Process -FilePath "node.exe" -ArgumentList @("-e", "setInterval(() => {}, 1000)") -PassThru
+  try {
+    Start-Sleep -Milliseconds 250
+    $foreignSnapshot = Get-TianjiProcessSnapshot -Pid $foreignNode.Id
+    $foreignNodeRecord = [pscustomobject]@{
+      pid = $foreignSnapshot.Pid
+      startedAt = $foreignSnapshot.StartedAt
+      processName = $foreignSnapshot.Name
+      executablePath = $foreignSnapshot.Path
+      commandLine = "node dist\\main.js"
+    }
+    Assert-Condition (-not (Test-TianjiRecordedProcess -Record $foreignNodeRecord)) "a non-Tianji node process is rejected by command ownership verification"
+  } finally {
+    if (Get-Process -Id $foreignNode.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $foreignNode.Id -Force }
+  }
 
   Write-Host "Tianji runtime state tests passed: $workspace" -ForegroundColor Green
 } finally {
