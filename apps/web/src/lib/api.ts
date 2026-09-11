@@ -6,7 +6,11 @@ function resolveApiBaseUrl() {
 
   // In LAN access, localhost belongs to the visitor's own computer.
   if (typeof window !== "undefined") {
-    const currentHostUrl = `${window.location.protocol}//${window.location.hostname}:3001/api`;
+    // The fixed release test environment runs on 3300/3301 while production
+    // remains on 3000/3001. Keep this routing rule at the environment edge so
+    // the same release can be exercised before production deployment.
+    const backendPort = window.location.port === "3300" ? "3301" : "3001";
+    const currentHostUrl = `${window.location.protocol}//${window.location.hostname}:${backendPort}/api`;
     if (!configuredUrl || /localhost|127\.0\.0\.1/.test(configuredUrl)) {
       return currentHostUrl;
     }
