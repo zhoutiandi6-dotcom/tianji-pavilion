@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { mkdir, unlink, writeFile } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { extname, join } from "path";
 import { PrismaService } from "../common/prisma.service";
 import { OperationLogService } from "../operation-log/operation-log.service";
 import { getTianjiDataPaths, resolveAttachmentStoragePath, toAttachmentStoragePath } from "../common/tianji-data-paths";
+import { emptyAnnotationDocument, validateAnnotationSave } from "./annotation-document";
 
 const ADMIN_ROLES = ["OWNER", "SUPER_ADMIN"];
 const EDITABLE_TASK_STATUS = ["DRAFT", "OPS_REJECTED"];
@@ -19,6 +20,71 @@ export class AttachmentsService {
   private readonly uploadRoot = this.dataPaths.attachmentsRoot;
 
   constructor(private prisma: PrismaService, private log: OperationLogService) {}
+
+  private async annotationAttachment(client: any, id: number, userId: number, userRole: string, write = false) {
+    if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequestException("Invalid attachment ID");
+    const attachment = await client.attachment.findUnique({
+      where: { id },
+      include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } } },
+    });
+    if (!attachment || attachment.deletedAt || attachment.imageTask?.deletedAt || attachment.imageTask?.task?.deletedAt || attachment.task?.deletedAt) throw new NotFoundException("Attachment not found");
+    if (!this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to view attachment");
+    if (!attachment.imageTaskId || !attachment.imageTask || !IMAGE_CATEGORIES.includes(attachment.category)
+      || !(attachment.mimeType?.startsWith("image/") || /\.(jpg|jpeg|png|webp|gif)$/i.test(attachment.fileName))) throw new BadRequestException("A real image-task attachment is required");
+    try {
+      if (!statSync(resolveAttachmentStoragePath(attachment.storagePath, this.dataPaths)).isFile()) throw new Error("Not a file");
+    } catch {
+      throw new NotFoundException("The uploaded image file is unavailable");
+    }
+    if (write) {
+      // Same demand-edit boundary as ImageTasksService.update; no new role capability.
+      const task = attachment.imageTask.task;
+      if (!ADMIN_ROLES.includes(userRole) && !(userRole === "OPERATION" && task.creatorId === userId && EDITABLE_TASK_STATUS.includes(task.workflowStatus))) throw new ForbiddenException("No permission to edit annotations");
+    }
+    return attachment;
+  }
+
+  private annotationResponse(attachment: any, row: any) {
+    return {
+      id: row?.id ?? null, attachmentId: attachment.id, imageTaskId: attachment.imageTaskId,
+      version: row?.version ?? 0, document: row ? JSON.parse(row.data) : emptyAnnotationDocument(),
+      createdById: row?.createdById ?? null, updatedById: row?.updatedById ?? null,
+      createdAt: row?.createdAt ?? null, updatedAt: row?.updatedAt ?? null,
+    };
+  }
+
+  async getAnnotations(id: number, userId: number, userRole: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const attachment = await this.annotationAttachment(tx, id, userId, userRole);
+      const row = await tx.imageAnnotationDocument.findUnique({ where: { attachmentId: id } });
+      return this.annotationResponse(attachment, row);
+    });
+  }
+
+  async saveAnnotations(id: number, body: unknown, userId: number, userRole: string) {
+    const { expectedVersion, document } = validateAnnotationSave(body);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const attachment = await this.annotationAttachment(tx, id, userId, userRole, true);
+        const data = JSON.stringify(document);
+        if (expectedVersion === 0) {
+          const row = await tx.imageAnnotationDocument.create({ data: { attachmentId: id, data, version: 1, createdById: userId, updatedById: userId } });
+          return this.annotationResponse(attachment, row);
+        }
+        const result = await tx.imageAnnotationDocument.updateMany({
+          where: { attachmentId: id, version: expectedVersion },
+          data: { data, version: { increment: 1 }, updatedById: userId },
+        });
+        if (result.count !== 1) throw new ConflictException("Annotations have changed. Reload before saving.");
+        const row = await tx.imageAnnotationDocument.findUnique({ where: { attachmentId: id } });
+        return this.annotationResponse(attachment, row);
+      });
+    } catch (error: any) {
+      // SQLite competing transactions can surface a busy/transaction conflict instead of a zero-row update.
+      if (["P2002", "P2034", "P1008", "P2028"].includes(error?.code)) throw new ConflictException("Annotations changed or another save is in progress. Reload before saving.");
+      throw error;
+    }
+  }
 
   async findByTask(taskId: number, userId: number, userRole: string) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { imageTasks: true } });

@@ -3,9 +3,11 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Request,
   Res,
   UploadedFile,
@@ -21,6 +23,18 @@ import { AttachmentsService } from "./attachments.service";
 @Controller("attachments")
 export class AttachmentsController {
   constructor(private service: AttachmentsService) {}
+
+  @Get(":attachmentId/annotations")
+  @Header("Cache-Control", "no-store")
+  getAnnotations(@Param("attachmentId", ParseIntPipe) id: number, @Request() req: any) {
+    return this.service.getAnnotations(id, req.user.sub, req.user.role);
+  }
+
+  @Put(":attachmentId/annotations")
+  @Header("Cache-Control", "no-store")
+  saveAnnotations(@Param("attachmentId", ParseIntPipe) id: number, @Body() body: unknown, @Request() req: any) {
+    return this.service.saveAnnotations(id, body, req.user.sub, req.user.role);
+  }
 
   @Get("by-task/:taskId")
   async findByTask(@Param("taskId", ParseIntPipe) taskId: number, @Request() req: any) {

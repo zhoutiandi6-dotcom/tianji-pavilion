@@ -205,6 +205,8 @@ export const weeklyOperationsApprovalPlanApi = {
 };
 
 export const attachmentApi = {
+  getAnnotations: (id: number) => api.get(`/attachments/${id}/annotations`, { headers: { "Cache-Control": "no-cache" } }),
+  saveAnnotations: (id: number, body: unknown) => api.put(`/attachments/${id}/annotations`, body),
   findByTask: (taskId: number) => api.get("/attachments/by-task/" + taskId),
   findByImageTask: (imageTaskId: number) => api.get("/attachments/by-image-task/" + imageTaskId),
   uploadTask: (taskId: number, category: string, file: File) => {

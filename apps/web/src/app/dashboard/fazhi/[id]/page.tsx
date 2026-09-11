@@ -4,9 +4,10 @@ import { ClipboardEvent, useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, Upload, message } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, MoreOutlined, RollbackOutlined, SaveOutlined, SendOutlined, StopOutlined, UploadOutlined } from "@ant-design/icons";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import ImageAnnotationViewer, { ImageAnnotation } from "@/components/ImageAnnotationViewer";
+import ImageAnnotationViewer from "@/components/ImageAnnotationViewer";
 import api, { attachmentApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayName, displayRequester, displayUserName } from "@/lib/display";
+import { useImageAnnotations } from "@/hooks/useImageAnnotations";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 import { DetailSection, SecondaryEmptyState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from "@/components/secondary-page";
 import styles from "./page.module.css";
@@ -112,6 +113,76 @@ function getDefaultImageSourceType(row: any): ImageSourceType {
   return "reference";
 }
 
+const AttachmentThumb = ({ item, label, sourceType, allowDelete, onOpen, onRemove }: { item: any; label: string; sourceType: ImageSourceType; allowDelete: boolean; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void> }) => {
+  const [thumbUrl, setThumbUrl] = useState<string>("");
+  const image = isImageAttachment(item);
+  const mimeType = item.mimeType || item.fileType || "image/*";
+
+  useEffect(() => {
+    let url = "";
+    let disposed = false;
+    setThumbUrl("");
+    if (!image) return;
+    attachmentApi.download(item.id)
+      .then((res) => {
+        if (disposed) return;
+        url = window.URL.createObjectURL(new Blob([res.data], { type: mimeType }));
+        setThumbUrl(url);
+      })
+      .catch(() => { if (!disposed) setThumbUrl(""); });
+    return () => {
+      disposed = true;
+      if (url) window.URL.revokeObjectURL(url);
+    };
+  }, [item.id, image, mimeType]);
+
+  return (
+    <div style={{ width: 118 }}>
+      <div
+        title={item.fileName}
+        onClick={() => onOpen(item, sourceType)}
+        style={{
+          width: 118,
+          height: 86,
+          border: "1px solid #e5e7eb",
+          borderRadius: 6,
+          overflow: "hidden",
+          background: "#fafafa",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: image ? "pointer" : "default",
+        }}
+      >
+        {thumbUrl ? (
+          <img src={thumbUrl} alt={label} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>{image ? "图片" : "文件"}</Text>
+        )}
+      </div>
+      <Space size={4} style={{ marginTop: 4, width: "100%", justifyContent: "space-between" }}>
+        <Text title={item.fileName} style={{ maxWidth: 76, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{label}</Text>
+        {allowDelete && (
+          <Popconfirm title="确认删除该附件？" onConfirm={() => onRemove(item)}>
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        )}
+      </Space>
+    </div>
+  );
+};
+
+const AttachmentGallery = ({ items, sourceType, allowDelete, emptyText, onOpen, onRemove }: { items: any[]; sourceType: ImageSourceType; allowDelete: boolean; emptyText: string; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void> }) => (
+  items.length ? (
+    <Space size={8} wrap>
+      {items.map((item, index) => {
+        const itemSourceType: ImageSourceType = item.category === "IMAGE_COMPLETED" ? "completed" : item.category === "IMAGE_ORIGINAL" ? "original" : sourceType;
+        return <AttachmentThumb key={item.id} item={item} label={`${sourceType === "completed" ? "完成稿" : "参考图"} ${index + 1}`} sourceType={itemSourceType} allowDelete={allowDelete} onOpen={onOpen} onRemove={onRemove} />;
+      })}
+    </Space>
+  ) : <Text type="secondary">{emptyText}</Text>
+);
+
 export default function FazhiDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -133,7 +204,7 @@ export default function FazhiDetailPage() {
   const [imageSourceType, setImageSourceType] = useState<ImageSourceType>("reference");
   const [selectedSourceKey, setSelectedSourceKey] = useState<string | undefined>();
   const [workbenchImage, setWorkbenchImage] = useState<{ url?: string; title?: string; blobUrl?: string }>({});
-  const [annotationDrafts, setAnnotationDrafts] = useState<Record<number, ImageAnnotation[]>>({});
+
   const [annotationExpanded, setAnnotationExpanded] = useState(false);
 
   const role = currentUser?.role || "";
@@ -206,11 +277,14 @@ export default function FazhiDetailPage() {
     (mainDraft.imageSize || "") !== (task.imageSize || "") ||
     (mainDraft.requirementTypeId ?? null) !== (task.requirementTypeId ?? null)
   );
-  const hasUnsavedChanges = !!task && (Object.keys(editingRows).length > 0 || materialLinks !== (task.materialLinks || "") || mainDraftChanged);
+
   const selectedImageTask = (task?.imageTasks || []).find((row: any) => row.id === selectedImageTaskId) || null;
   const selectedGroupedForHooks = groupByCategory(selectedImageTask?.attachments || []);
   const currentImageSources = getImageSources(selectedImageTask, selectedGroupedForHooks, imageSourceType);
   const currentImageSource = currentImageSources.find((source) => source.key === selectedSourceKey) || currentImageSources[0];
+  const annotationAttachmentId = currentImageSource?.kind === "attachment" ? currentImageSource.attachment.id : undefined;
+  const annotationState = useImageAnnotations(annotationAttachmentId);
+  const hasUnsavedChanges = annotationState.anyDirty || (!!task && (Object.keys(editingRows).length > 0 || materialLinks !== (task.materialLinks || "") || mainDraftChanged));
   const currentImageSourceSignature = currentImageSources.map((source) => source.key).join("|");
 
   useEffect(() => {
@@ -246,7 +320,7 @@ export default function FazhiDetailPage() {
   useEffect(() => {
     let localUrl: string | undefined;
     let disposed = false;
-    if (workbenchImage.blobUrl) window.URL.revokeObjectURL(workbenchImage.blobUrl);
+    setWorkbenchImage({});
 
     const loadImage = async () => {
       if (!currentImageSource) {
@@ -260,6 +334,7 @@ export default function FazhiDetailPage() {
       const attachment = currentImageSource.attachment;
       try {
         const res = await attachmentApi.download(attachment.id);
+        if (disposed) return;
         localUrl = window.URL.createObjectURL(new Blob([res.data], { type: attachment.mimeType || attachment.fileType || "image/*" }));
         if (!disposed) setWorkbenchImage({ url: localUrl, blobUrl: localUrl, title: attachment.fileName || currentImageSource.label });
       } catch (err) {
@@ -273,7 +348,7 @@ export default function FazhiDetailPage() {
       disposed = true;
       if (localUrl) window.URL.revokeObjectURL(localUrl);
     };
-  }, [currentImageSource?.key, currentImageSource?.url]);
+  }, [selectedImageTask?.id, currentImageSource?.key, currentImageSource?.url]);
 
   useEffect(() => {
     if (!selectedImageTask || imageSourceType !== "completed") return;
@@ -393,6 +468,16 @@ export default function FazhiDetailPage() {
     }
   };
 
+  const openGalleryAttachment = (item: any, sourceType: ImageSourceType) => {
+    if (isImageAttachment(item)) {
+      setImageSourceType(sourceType);
+      setSelectedSourceKey(`attachment-${item.id}`);
+      void previewAttachment(item);
+    } else {
+      void downloadAttachment(item);
+    }
+  };
+
   const uploadImageAttachment = async (row: any, category: string, file: File) => {
     try {
       const saved = await saveRowPatch(row, false);
@@ -410,82 +495,6 @@ export default function FazhiDetailPage() {
     }
     return Upload.LIST_IGNORE;
   };
-
-  const AttachmentThumb = ({ item, label, sourceType, allowDelete }: { item: any; label: string; sourceType: ImageSourceType; allowDelete: boolean }) => {
-    const [thumbUrl, setThumbUrl] = useState<string>("");
-    const image = isImageAttachment(item);
-
-    useEffect(() => {
-      let url = "";
-      let disposed = false;
-      if (!image) return;
-      attachmentApi.download(item.id)
-        .then((res) => {
-          if (disposed) return;
-          url = window.URL.createObjectURL(new Blob([res.data], { type: item.mimeType || item.fileType || "image/*" }));
-          setThumbUrl(url);
-        })
-        .catch(() => setThumbUrl(""));
-      return () => {
-        disposed = true;
-        if (url) window.URL.revokeObjectURL(url);
-      };
-    }, [item.id, image]);
-
-    return (
-      <div style={{ width: 118 }}>
-        <div
-          title={item.fileName}
-          onClick={() => {
-            if (image) {
-              setImageSourceType(sourceType);
-              setSelectedSourceKey(`attachment-${item.id}`);
-              previewAttachment(item);
-            } else {
-              downloadAttachment(item);
-            }
-          }}
-          style={{
-            width: 118,
-            height: 86,
-            border: "1px solid #e5e7eb",
-            borderRadius: 6,
-            overflow: "hidden",
-            background: "#fafafa",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: image ? "pointer" : "default",
-          }}
-        >
-          {thumbUrl ? (
-            <img src={thumbUrl} alt={label} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-          ) : (
-            <Text type="secondary" style={{ fontSize: 12 }}>{image ? "图片" : "文件"}</Text>
-          )}
-        </div>
-        <Space size={4} style={{ marginTop: 4, width: "100%", justifyContent: "space-between" }}>
-          <Text title={item.fileName} style={{ maxWidth: 76, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{label}</Text>
-          {allowDelete && (
-            <Popconfirm title="确认删除该附件？" onConfirm={() => removeAttachment(item)}>
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
-          )}
-        </Space>
-      </div>
-    );
-  };
-
-  const AttachmentGallery = ({ items, sourceType, allowDelete, emptyText }: { items: any[]; sourceType: ImageSourceType; allowDelete: boolean; emptyText: string }) => (
-    items.length ? (
-      <Space size={8} wrap>
-        {items.map((item, index) => {
-          const itemSourceType: ImageSourceType = item.category === "IMAGE_COMPLETED" ? "completed" : item.category === "IMAGE_ORIGINAL" ? "original" : sourceType;
-          return <AttachmentThumb key={item.id} item={item} label={`${sourceType === "completed" ? "完成稿" : "参考图"} ${index + 1}`} sourceType={itemSourceType} allowDelete={allowDelete} />;
-        })}
-      </Space>
-    ) : <Text type="secondary">{emptyText}</Text>
-  );
 
   const UploadButton = ({ label, onFile }: { label: string; onFile: (file: File) => Promise<any> }) => (
     <Upload showUploadList={false} beforeUpload={(file) => onFile(file)}>
@@ -732,15 +741,10 @@ export default function FazhiDetailPage() {
     });
   };
 
-  const saveAnnotations = (rowId: number, annotations: ImageAnnotation[]) => {
-    setAnnotationDrafts((prev) => ({ ...prev, [rowId]: annotations }));
-    message.info("当前标注为预览能力，刷新后可能丢失。");
-  };
-
   if (loading) return <SecondaryPageShell><div className={styles.loadingState}><Spin size="large" /><Text type="secondary">正在加载法旨信息</Text></div></SecondaryPageShell>;
   if (!task) return <SecondaryPageShell><SecondaryEmptyState description="法旨暂时无法显示" /></SecondaryPageShell>;
   const selectedGrouped = groupByCategory(selectedImageTask?.attachments || []);
-  const selectedAnnotations = selectedImageTask ? (annotationDrafts[selectedImageTask.id] || []) : [];
+
   const canSelectedReview = selectedImageTask && (isDesignManager || isAdmin) && selectedImageTask.status === "SUBMITTED_FOR_REVIEW";
   const canSelectedUploadCompleted = !!selectedImageTask && ((isDesigner && selectedImageTask.designerId === currentUser?.id) || isAdmin);
   const archivedStage = ["DESIGN_APPROVED", "COMPLETED", "CANCELLED"].includes(task.workflowStatus) || ["APPROVED", "COMPLETED"].includes(selectedImageTask?.status || "");
@@ -987,7 +991,7 @@ export default function FazhiDetailPage() {
             <Card
               size="small"
               title="参考图"
-              extra={((selectedGrouped.IMAGE_ORIGINAL || []).length || (selectedGrouped.IMAGE_REFERENCE || []).length) ? <Button size="small" onClick={() => setAnnotationExpanded((prev) => !prev)}>{canEditDraft ? "编辑标注" : "查看标注"}</Button> : null}
+              extra={currentImageSource ? <Button size="small" onClick={() => setAnnotationExpanded((prev) => !prev)}>{canEditDraft ? "编辑标注" : "查看标注"}</Button> : null}
               onClick={() => setImageSourceType("reference")}
               onPaste={(event) => handleWorkbenchPaste(event, "IMAGE_REFERENCE")}
             >
@@ -998,6 +1002,8 @@ export default function FazhiDetailPage() {
                   <Col xs={24} md={showCompletedAssets ? 12 : 24}>
                     <Space direction="vertical" size={8} style={{ width: "100%" }}>
                       <AttachmentGallery
+                        onOpen={openGalleryAttachment}
+                        onRemove={removeAttachment}
                         items={[...(selectedGrouped.IMAGE_ORIGINAL || []), ...(selectedGrouped.IMAGE_REFERENCE || [])]}
                         sourceType="reference"
                         allowDelete={!!canEditDraft}
@@ -1016,6 +1022,8 @@ export default function FazhiDetailPage() {
                       >
                         <Space direction="vertical" size={8} style={{ width: "100%" }}>
                           <AttachmentGallery
+                            onOpen={openGalleryAttachment}
+                            onRemove={removeAttachment}
                             items={selectedGrouped.IMAGE_COMPLETED || []}
                             sourceType="completed"
                             allowDelete={showCompletedUpload}
@@ -1036,6 +1044,8 @@ export default function FazhiDetailPage() {
                 title="标注"
                 extra={<Button size="small" onClick={() => setAnnotationExpanded(false)}>收起标注</Button>}
               >
+                {annotationState.saveError && <Alert type="error" showIcon message={annotationState.saveError} style={{ marginBottom: 12 }} />}
+                {annotationAttachmentId && (annotationState.error || annotationState.conflict) && <Button onClick={() => { if (!annotationState.dirty || window.confirm("重新读取将放弃当前未保存草稿，是否继续？")) annotationState.reload(); }}>重新读取标注</Button>}
                 {!workbenchImage.url ? (
                   <Text type="secondary">暂无可标注图片，请先上传参考图。</Text>
                 ) : (
@@ -1043,9 +1053,11 @@ export default function FazhiDetailPage() {
                     mode={annotationMode as any}
                     imageUrl={workbenchImage.url}
                     imageTitle={workbenchImage.title || selectedImageTask.imageTitle}
-                    annotations={selectedAnnotations}
-                    onChange={(items) => setAnnotationDrafts((prev) => ({ ...prev, [selectedImageTask.id]: items }))}
-                    onSave={(items) => saveAnnotations(selectedImageTask.id, items)}
+                    annotations={annotationState.annotations}
+                    saving={annotationState.saving}
+                    disabledReason={!annotationAttachmentId ? "当前图片没有稳定附件，请上传为附件后保存标注" : annotationState.loading ? "正在读取已保存标注" : annotationState.error || (annotationState.conflict ? "标注已被其他人更新，请核对后重新读取" : undefined)}
+                    onChange={annotationState.change}
+                    onSave={async (items) => { const saved = await annotationState.save(items); if (saved) message.success("标注已保存"); return saved; }}
                   />
                 )}
               </Card>

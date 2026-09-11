@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
-import { Alert, Button, Empty, Select, Space, Tag, Typography } from "antd";
+import { Alert, Button, Empty, Input, Select, Space, Tag, Typography } from "antd";
 import { DeleteOutlined, EyeInvisibleOutlined, EyeOutlined, SaveOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
@@ -11,7 +11,7 @@ export type AnnotationMode = "edit" | "view" | "review";
 export type AnnotationType = "point" | "rectangle";
 
 export type ImageAnnotation = {
-  id: number;
+  id: string;
   type: AnnotationType;
   x: number;
   y: number;
@@ -29,7 +29,9 @@ type Props = {
   imageTitle?: string;
   annotations?: ImageAnnotation[];
   onChange?: (annotations: ImageAnnotation[]) => void;
-  onSave?: (annotations: ImageAnnotation[]) => void;
+  onSave?: (annotations: ImageAnnotation[]) => boolean | Promise<boolean>;
+  saving?: boolean;
+  disabledReason?: string;
 };
 
 const COLOR_OPTIONS: Array<{ value: AnnotationColor; label: string; color: string; usage: string }> = [
@@ -49,14 +51,27 @@ function clamp(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
-export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, annotations = [], onChange, onSave }: Props) {
+const EMPTY_ANNOTATIONS: ImageAnnotation[] = [];
+function newAnnotationId() {
+  return Array.from(window.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, annotations = EMPTY_ANNOTATIONS, onChange, onSave, saving = false, disabledReason }: Props) {
   const [items, setItems] = useState<ImageAnnotation[]>(annotations);
   const [visible, setVisible] = useState(true);
   const [tool, setTool] = useState<AnnotationType>("point");
   const [color, setColor] = useState<AnnotationColor>("red");
   const [draftRect, setDraftRect] = useState<ImageAnnotation | null>(null);
   const [rectStart, setRectStart] = useState<{ x: number; y: number } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string>();
+  const saveInFlight = useRef(false);
+  const imageGeneration = useRef(0);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  useEffect(() => { imageGeneration.current++; setImageLoaded(false); setDraftRect(null); setRectStart(null); setEditingId(null); setSaveError(undefined); }, [imageUrl]);
   const editable = mode === "edit";
+  const canEdit = editable && !saving && !disabledReason && imageLoaded;
+  const canDraw = canEdit && !editingId;
   const modeLabel = mode === "edit" ? "运营编辑" : mode === "review" ? "主管审核查看" : "设计师查看";
 
   useEffect(() => setItems(annotations), [annotations]);
@@ -71,6 +86,21 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
     onChange?.(next);
   };
 
+  const saveItems = async () => {
+    if (!canEdit || !onSave || saveInFlight.current) return;
+    const generation = imageGeneration.current;
+    saveInFlight.current = true;
+    setSaveError(undefined);
+    try {
+      const saved = await onSave(items);
+      if (generation !== imageGeneration.current) return;
+      if (saved) setEditingId(null);
+      else setSaveError("保存失败，当前编辑状态和输入已保留，请重试或按上方提示处理。");
+    } catch {
+      if (generation === imageGeneration.current) setSaveError("保存失败，当前编辑状态和输入已保留，请重试。");
+    } finally { saveInFlight.current = false; }
+  };
+
   const pointFromEvent = (event: MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {
@@ -80,22 +110,22 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
   };
 
   const addPoint = (event: MouseEvent<HTMLDivElement>) => {
-    if (!editable || tool !== "point") return;
+    if (!canDraw || tool !== "point") return;
     const text = window.prompt("请输入标注说明");
     if (!text?.trim()) return;
     const point = pointFromEvent(event);
-    commitItems([...items, { id: items.length + 1, type: "point", color, text: text.trim(), ...point }]);
+    commitItems([...items, { id: newAnnotationId(), type: "point", color, text: text.trim(), ...point }]);
   };
 
   const beginRect = (event: MouseEvent<HTMLDivElement>) => {
-    if (!editable || tool !== "rectangle") return;
+    if (!canDraw || tool !== "rectangle") return;
     const point = pointFromEvent(event);
     setRectStart(point);
-    setDraftRect({ id: items.length + 1, type: "rectangle", color, text: "", x: point.x, y: point.y, width: 0, height: 0 });
+    setDraftRect({ id: newAnnotationId(), type: "rectangle", color, text: "", x: point.x, y: point.y, width: 0, height: 0 });
   };
 
   const updateRect = (event: MouseEvent<HTMLDivElement>) => {
-    if (!draftRect || !rectStart) return;
+    if (!canDraw || !draftRect || !rectStart) return;
     const point = pointFromEvent(event);
     setDraftRect({
       ...draftRect,
@@ -107,7 +137,7 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
   };
 
   const finishRect = () => {
-    if (!draftRect) return;
+    if (!canDraw || !draftRect) return;
     if ((draftRect.width || 0) < 2 || (draftRect.height || 0) < 2) {
       setDraftRect(null);
       setRectStart(null);
@@ -119,8 +149,9 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
     setRectStart(null);
   };
 
-  const removeItem = (id: number) => {
-    const next = items.filter((item) => item.id !== id).map((item, index) => ({ ...item, id: index + 1 }));
+  const removeItem = (id: string) => {
+    if (!canDraw) return;
+    const next = items.filter((item) => item.id !== id);
     commitItems(next);
   };
 
@@ -135,11 +166,13 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
           <>
             <Select size="small" value={tool} style={{ width: 116 }} onChange={setTool} options={[{ value: "point", label: "点标注" }, { value: "rectangle", label: "框选区域" }]} />
             <Select size="small" value={color} style={{ width: 170 }} onChange={setColor} options={colorOptions} />
-            <Button size="small" icon={<SaveOutlined />} onClick={() => onSave?.(items)}>保存标注</Button>
+            <Button size="small" icon={<SaveOutlined />} loading={saving} disabled={!canEdit || !onSave} onClick={saveItems}>保存标注</Button>
           </>
         )}
       </Space>
 
+      {disabledReason && <Alert type="info" showIcon message={disabledReason} style={{ marginBottom: 12 }} />}
+      {saveError && <Alert type="error" showIcon message={saveError} style={{ marginBottom: 12 }} />}
       {!imageUrl ? (
         <Empty description="暂无可标注参考图，请先上传原图或参考图" />
       ) : (
@@ -165,13 +198,13 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
           onMouseMove={updateRect}
           onMouseUp={finishRect}
         >
-            <img src={imageUrl} alt={imageTitle || "reference"} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} draggable={false} />
-            {visible && [...items, ...(draftRect ? [draftRect] : [])].map((item) => {
+            <img onLoad={() => setImageLoaded(true)} onError={() => setImageLoaded(false)} src={imageUrl} alt={imageTitle || "reference"} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} draggable={false} />
+            {visible && [...items, ...(draftRect ? [draftRect] : [])].map((item, index) => {
               const color = colorHex(item.color);
               if (item.type === "point") {
                 return (
                   <div key={`${item.id}-${item.type}`} style={{ position: "absolute", left: `${item.x}%`, top: `${item.y}%`, transform: "translate(-50%, -50%)" }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 14, background: color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, boxShadow: "0 4px 12px rgba(15,23,42,.2)", lineHeight: "28px" }}>{item.id}</div>
+                    <div style={{ width: 28, height: 28, borderRadius: 14, background: color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, boxShadow: "0 4px 12px rgba(15,23,42,.2)", lineHeight: "28px" }}>{index + 1}</div>
                   </div>
                 );
               }
@@ -189,7 +222,7 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
                     borderRadius: 4,
                   }}
                 >
-                  <span style={{ position: "absolute", left: -1, top: -30, width: 28, height: 28, borderRadius: 14, background: color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, lineHeight: "28px" }}>{item.id}</span>
+                  <span style={{ position: "absolute", left: -1, top: -30, width: 28, height: 28, borderRadius: 14, background: color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, lineHeight: "28px" }}>{index + 1}</span>
                 </div>
               );
             })}
@@ -200,16 +233,24 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
       <div style={{ marginTop: 12 }}>
         <Text strong>图片标注说明</Text>
         {!items.length ? (
-          <Alert style={{ marginTop: 8 }} type="info" showIcon message="当前标注为预览能力，刷新后可能丢失。" />
+          <Alert style={{ marginTop: 8 }} type="info" showIcon message="暂无标注" />
         ) : (
           <Space direction="vertical" style={{ width: "100%", marginTop: 8 }}>
-            {items.map((item) => (
+            {items.map((item, index) => (
               <Space key={item.id} align="start" style={{ width: "100%", justifyContent: "space-between" }}>
                 <Space align="start">
-                  <Tag color={item.color}>{item.id}</Tag>
-                  <Text>{item.text || "未填写说明"}</Text>
+                  <Tag color={item.color}>{index + 1}</Tag>
+                  {editingId === item.id ? (
+                    <Input.TextArea aria-label={`编辑标注 ${index + 1}`} value={item.text} maxLength={2000} disabled={!canEdit}
+                      onChange={(event) => commitItems(items.map(mark => mark.id === item.id ? { ...mark, text: event.target.value } : mark))} />
+                  ) : <Text>{item.text || "未填写说明"}</Text>}
                 </Space>
-                {editable && <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeItem(item.id)}>删除</Button>}
+                {editable && <Space>
+                  {editingId === item.id
+                    ? <Button size="small" loading={saving} disabled={!canEdit} onClick={saveItems}>保存修改</Button>
+                    : <Button size="small" disabled={!canEdit || !!editingId} onClick={() => { setEditingId(item.id); setDraftRect(null); setRectStart(null); }}>编辑</Button>}
+                  <Button size="small" danger disabled={!canDraw} icon={<DeleteOutlined />} onClick={() => removeItem(item.id)}>删除</Button>
+                </Space>}
               </Space>
             ))}
           </Space>
