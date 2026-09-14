@@ -7,6 +7,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDetail, type ImageTaskDetailAttachment } from '@/lib/api';
 import { formatShanghaiDateTime } from '@/lib/shanghai-week';
 import { useDashboardRefresh } from '@/hooks/useDashboardRefresh';
+import { useAttachmentImages } from '@/hooks/useAttachmentImages';
 import { DetailSection, SecondaryEmptyState, SecondaryErrorState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from '@/components/secondary-page';
 import styles from './page.module.css';
 
@@ -49,6 +50,21 @@ function unwrapDetail(response: { data: ImageTaskDetail | { data: ImageTaskDetai
   return 'data' in payload ? payload.data : payload;
 }
 
+function ReferenceThumbnail({ attachment, loadImage, onOpen }: { attachment: ImageTaskDetailAttachment; loadImage: (attachment: ImageTaskDetailAttachment) => Promise<string>; onOpen: () => void }) {
+  const [url, setUrl] = useState('');
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setUrl('');
+    setFailed(false);
+    loadImage(attachment).then(value => { if (active) setUrl(value); }, () => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [attachment.id, loadImage]);
+  return <button type="button" onClick={onOpen} aria-label={`预览参考图 ${attachment.fileName}`} style={{ width: 118, height: 86, padding: 0, border: '1px solid #e5e7eb', background: '#fafafa', cursor: 'pointer' }}>
+    {url ? <img src={url} alt={attachment.fileName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : failed ? '加载失败，点击重试' : <Spin size="small" />}
+  </button>;
+}
+
 export default function ImageTaskDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -75,6 +91,7 @@ export default function ImageTaskDetailPage() {
   const rejectRunningRef = useRef(false);
   const approveRunningRef = useRef(false);
   const completedArtworkInputRef = useRef<HTMLInputElement | null>(null);
+  const loadAttachmentImage = useAttachmentImages();
 
   const loadDetail = useCallback(async (showLoading = false) => {
     if (!Number.isInteger(taskId) || taskId <= 0) {
@@ -123,9 +140,6 @@ export default function ImageTaskDetailPage() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => () => {
-    if (preview?.url) window.URL.revokeObjectURL(preview.url);
-  }, [preview?.url]);
 
   const refreshCore = useCallback(async () => {
     if (errorStatus === 403 || errorStatus === 404) return;
@@ -161,12 +175,8 @@ export default function ImageTaskDetailPage() {
       return;
     }
     try {
-      const response = await attachmentApi.download(attachment.id);
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: attachment.mimeType }));
-      setPreview((current) => {
-        if (current?.url) window.URL.revokeObjectURL(current.url);
-        return { url, title: attachment.fileName };
-      });
+      const url = await loadAttachmentImage(attachment);
+      setPreview({ url, title: attachment.fileName });
     } catch (requestError) {
       message.error(getErrorMessage(requestError, '预览失败，请稍后重试'));
     }
@@ -177,8 +187,10 @@ export default function ImageTaskDetailPage() {
     return (
       <div className={styles.attachmentGrid}>
         {attachments.map((attachment) => (
-          <article className={styles.attachmentCard} key={attachment.id}>
-            <div className={styles.attachmentIcon}><FileImageOutlined /></div>
+          <article className={`${styles.attachmentCard} ${attachment.category === 'IMAGE_REFERENCE' && isImageAttachment(attachment) ? styles.referenceAttachmentCard : ''}`} key={attachment.id}>
+            {attachment.category === 'IMAGE_REFERENCE' && isImageAttachment(attachment)
+              ? <ReferenceThumbnail attachment={attachment} loadImage={loadAttachmentImage} onOpen={() => void previewAttachment(attachment)} />
+              : <div className={styles.attachmentIcon}><FileImageOutlined /></div>}
             <div className={styles.attachmentMeta}>
               <strong title={attachment.fileName}>{attachment.fileName}</strong>
               <span>{formatFileSize(attachment.fileSize)} · {attachment.mimeType || '-'}</span>

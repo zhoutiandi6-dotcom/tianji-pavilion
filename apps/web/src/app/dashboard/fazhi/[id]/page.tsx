@@ -1,6 +1,6 @@
 'use client';
 
-import { ClipboardEvent, useCallback, useEffect, useState } from "react";
+import { ClipboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, Upload, message } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, MoreOutlined, RollbackOutlined, SaveOutlined, SendOutlined, StopOutlined, UploadOutlined } from "@ant-design/icons";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -8,6 +8,7 @@ import ImageAnnotationViewer from "@/components/ImageAnnotationViewer";
 import api, { attachmentApi, getErrorMessage, imageTaskApi, taskApi, userApi } from "@/lib/api";
 import { displayName, displayRequester, displayUserName } from "@/lib/display";
 import { useImageAnnotations } from "@/hooks/useImageAnnotations";
+import { useAttachmentImages } from "@/hooks/useAttachmentImages";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
 import { DetailSection, SecondaryEmptyState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from "@/components/secondary-page";
 import styles from "./page.module.css";
@@ -95,8 +96,10 @@ function getImageSources(row: any, grouped: Record<string, any[]>, type: ImageSo
   items.filter(isImageAttachment).forEach((item: any, index: number) => {
     sources.push({ key: `attachment-${item.id}`, kind: "attachment", attachment: item, label: `${sourceLabels[type]} ${index + 1}` });
   });
-  if (link) sources.push({ key: `${type}-link`, kind: "link", url: link, label: `${sourceLabels[type]}链接` });
-  if (type === "reference" && row.originalImageUrl) sources.push({ key: "original-link", kind: "link", url: row.originalImageUrl, label: "原图链接" });
+  // Saved path/description fields must never displace a persisted image attachment.
+  if (sources.length) return sources;
+  if (link && /^https?:\/\//i.test(link.trim())) sources.push({ key: `${type}-link`, kind: "link", url: link, label: `${sourceLabels[type]}链接` });
+  if (type === "reference" && /^https?:\/\//i.test(String(row.originalImageUrl || "").trim())) sources.push({ key: "original-link", kind: "link", url: row.originalImageUrl, label: "原图链接" });
   return sources;
 }
 
@@ -113,28 +116,25 @@ function getDefaultImageSourceType(row: any): ImageSourceType {
   return "reference";
 }
 
-const AttachmentThumb = ({ item, label, sourceType, allowDelete, onOpen, onRemove }: { item: any; label: string; sourceType: ImageSourceType; allowDelete: boolean; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void> }) => {
+const AttachmentThumb = ({ item, label, sourceType, allowDelete, onOpen, onRemove, loadImage }: { item: any; label: string; sourceType: ImageSourceType; allowDelete: boolean; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void>; loadImage: (item: any) => Promise<string> }) => {
   const [thumbUrl, setThumbUrl] = useState<string>("");
   const image = isImageAttachment(item);
   const mimeType = item.mimeType || item.fileType || "image/*";
 
   useEffect(() => {
-    let url = "";
     let disposed = false;
     setThumbUrl("");
     if (!image) return;
-    attachmentApi.download(item.id)
-      .then((res) => {
+    loadImage(item)
+      .then((url) => {
         if (disposed) return;
-        url = window.URL.createObjectURL(new Blob([res.data], { type: mimeType }));
         setThumbUrl(url);
       })
       .catch(() => { if (!disposed) setThumbUrl(""); });
     return () => {
       disposed = true;
-      if (url) window.URL.revokeObjectURL(url);
     };
-  }, [item.id, image, mimeType]);
+  }, [item.id, image, mimeType, loadImage]);
 
   return (
     <div style={{ width: 118 }}>
@@ -172,12 +172,12 @@ const AttachmentThumb = ({ item, label, sourceType, allowDelete, onOpen, onRemov
   );
 };
 
-const AttachmentGallery = ({ items, sourceType, allowDelete, emptyText, onOpen, onRemove }: { items: any[]; sourceType: ImageSourceType; allowDelete: boolean; emptyText: string; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void> }) => (
+const AttachmentGallery = ({ items, sourceType, allowDelete, emptyText, onOpen, onRemove, loadImage }: { items: any[]; sourceType: ImageSourceType; allowDelete: boolean; emptyText: string; onOpen: (item: any, sourceType: ImageSourceType) => void; onRemove: (item: any) => Promise<void>; loadImage: (item: any) => Promise<string> }) => (
   items.length ? (
     <Space size={8} wrap>
       {items.map((item, index) => {
         const itemSourceType: ImageSourceType = item.category === "IMAGE_COMPLETED" ? "completed" : item.category === "IMAGE_ORIGINAL" ? "original" : sourceType;
-        return <AttachmentThumb key={item.id} item={item} label={`${sourceType === "completed" ? "完成稿" : "参考图"} ${index + 1}`} sourceType={itemSourceType} allowDelete={allowDelete} onOpen={onOpen} onRemove={onRemove} />;
+        return <AttachmentThumb key={item.id} item={item} label={`${sourceType === "completed" ? "完成稿" : "参考图"} ${index + 1}`} sourceType={itemSourceType} allowDelete={allowDelete} onOpen={onOpen} onRemove={onRemove} loadImage={loadImage} />;
       })}
     </Space>
   ) : <Text type="secondary">{emptyText}</Text>
@@ -206,6 +206,8 @@ export default function FazhiDetailPage() {
   const [workbenchImage, setWorkbenchImage] = useState<{ url?: string; title?: string; blobUrl?: string }>({});
 
   const [annotationExpanded, setAnnotationExpanded] = useState(false);
+  const loadAttachmentImage = useAttachmentImages();
+  const taskReadVersion = useRef(0);
 
   const role = currentUser?.role || "";
   const isAdmin = ["OWNER", "SUPER_ADMIN"].includes(role);
@@ -215,12 +217,14 @@ export default function FazhiDetailPage() {
   const isDesigner = role === "DESIGNER";
 
   const loadTask = useCallback(async (showLoading = false, preserveMainDraft = false) => {
+    const readVersion = ++taskReadVersion.current;
     if (showLoading) setLoading(true);
     try {
       const res = await api.get(`/tasks/${id}`, {
         headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
       });
       const data = res.data.data || res.data;
+      if (readVersion !== taskReadVersion.current) return;
       setTask(data);
       setMaterialLinks(data.materialLinks || "");
       if (!preserveMainDraft) {
@@ -254,9 +258,6 @@ export default function FazhiDetailPage() {
 
   useDashboardRefresh({ refreshCore: () => loadTask(false, true) });
 
-  useEffect(() => () => {
-    if (preview.url) window.URL.revokeObjectURL(preview.url);
-  }, [preview.url]);
 
   const isDraftEditableStatus = task && ["DRAFT", "OPS_REJECTED"].includes(task.workflowStatus);
   const isCreator = task && task.creatorId === currentUser?.id;
@@ -318,7 +319,6 @@ export default function FazhiDetailPage() {
   }, [selectedImageTask?.id, imageSourceType, currentImageSourceSignature, selectedSourceKey]);
 
   useEffect(() => {
-    let localUrl: string | undefined;
     let disposed = false;
     setWorkbenchImage({});
 
@@ -333,9 +333,8 @@ export default function FazhiDetailPage() {
       }
       const attachment = currentImageSource.attachment;
       try {
-        const res = await attachmentApi.download(attachment.id);
+        const localUrl = await loadAttachmentImage(attachment);
         if (disposed) return;
-        localUrl = window.URL.createObjectURL(new Blob([res.data], { type: attachment.mimeType || attachment.fileType || "image/*" }));
         if (!disposed) setWorkbenchImage({ url: localUrl, blobUrl: localUrl, title: attachment.fileName || currentImageSource.label });
       } catch (err) {
         console.error("[fazhi-detail] load workbench image failed", err);
@@ -346,9 +345,8 @@ export default function FazhiDetailPage() {
     loadImage();
     return () => {
       disposed = true;
-      if (localUrl) window.URL.revokeObjectURL(localUrl);
     };
-  }, [selectedImageTask?.id, currentImageSource?.key, currentImageSource?.url]);
+  }, [selectedImageTask?.id, currentImageSource?.key, currentImageSource?.url, loadAttachmentImage]);
 
   useEffect(() => {
     if (!selectedImageTask || imageSourceType !== "completed") return;
@@ -446,9 +444,7 @@ export default function FazhiDetailPage() {
 
   const previewAttachment = async (attachment: any) => {
     try {
-      const res = await attachmentApi.download(attachment.id);
-      if (preview.url) window.URL.revokeObjectURL(preview.url);
-      const url = window.URL.createObjectURL(new Blob([res.data], { type: attachment.mimeType || attachment.fileType || "image/*" }));
+      const url = await loadAttachmentImage(attachment);
       setPreview({ open: true, url, title: attachment.fileName });
     } catch (err) {
       console.error("[fazhi-detail] preview failed", err);
@@ -479,19 +475,27 @@ export default function FazhiDetailPage() {
   };
 
   const uploadImageAttachment = async (row: any, category: string, file: File) => {
+    const hideUploading = message.loading("附件上传中，请稍候…", 0);
     try {
       const saved = await saveRowPatch(row, false);
       if (!saved) return Upload.LIST_IGNORE;
       const res = await attachmentApi.uploadImageTask(row.id, category, file);
       const attachment = res.data.data || res.data;
+      if (!Number.isSafeInteger(attachment?.id) || attachment.imageTaskId !== row.id) throw new Error("Invalid attachment response");
+      // Ignore reads started before upload committed; publish the returned record atomically.
+      taskReadVersion.current += 1;
+      setTask((previous: any) => ({ ...previous, imageTasks: previous.imageTasks.map((item: any) => item.id === row.id
+        ? { ...item, attachments: [attachment, ...(item.attachments || []).filter((existing: any) => existing.id !== attachment.id)] }
+        : item) }));
       setSelectedImageTaskId(row.id);
       setImageSourceType(imageSourceTypeFromCategory(category));
       if (attachment?.id) setSelectedSourceKey(`attachment-${attachment.id}`);
       message.success("附件已上传");
-      loadTask();
     } catch (err) {
       console.error("[fazhi-detail] upload image attachment failed", err);
       message.error(getErrorMessage(err, "上传失败，请稍后重试"));
+    } finally {
+      hideUploading();
     }
     return Upload.LIST_IGNORE;
   };
@@ -1002,6 +1006,7 @@ export default function FazhiDetailPage() {
                   <Col xs={24} md={showCompletedAssets ? 12 : 24}>
                     <Space direction="vertical" size={8} style={{ width: "100%" }}>
                       <AttachmentGallery
+                        loadImage={loadAttachmentImage}
                         onOpen={openGalleryAttachment}
                         onRemove={removeAttachment}
                         items={[...(selectedGrouped.IMAGE_ORIGINAL || []), ...(selectedGrouped.IMAGE_REFERENCE || [])]}
@@ -1022,6 +1027,7 @@ export default function FazhiDetailPage() {
                       >
                         <Space direction="vertical" size={8} style={{ width: "100%" }}>
                           <AttachmentGallery
+                            loadImage={loadAttachmentImage}
                             onOpen={openGalleryAttachment}
                             onRemove={removeAttachment}
                             items={selectedGrouped.IMAGE_COMPLETED || []}

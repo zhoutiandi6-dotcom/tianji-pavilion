@@ -212,7 +212,7 @@
 
 .attachmentCard {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-columns: var(--attachment-preview-width, 34px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -231,6 +231,10 @@
   background: #edf4ff;
   color: #1d5fbf;
   font-size: 17px;
+}
+
+.referenceAttachmentCard {
+  --attachment-preview-width: 118px;
 }
 
 .attachmentMeta {
@@ -358,7 +362,7 @@
   }
 
   .attachmentCard {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: var(--attachment-preview-width, 34px) minmax(0, 1fr);
   }
 
   .attachmentActions {

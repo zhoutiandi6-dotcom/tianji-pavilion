@@ -67,8 +67,17 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
   const [saveError, setSaveError] = useState<string>();
   const saveInFlight = useRef(false);
   const imageGeneration = useRef(0);
-  const [imageLoaded, setImageLoaded] = useState(false);
-  useEffect(() => { imageGeneration.current++; setImageLoaded(false); setDraftRect(null); setRectStart(null); setEditingId(null); setSaveError(undefined); }, [imageUrl]);
+  const imageElementRef = useRef<HTMLImageElement>(null);
+  const [loadedImageUrl, setLoadedImageUrl] = useState<string>();
+  const imageLoaded = !!imageUrl && loadedImageUrl === imageUrl;
+  useEffect(() => {
+    imageGeneration.current++;
+    setDraftRect(null);
+    setRectStart(null);
+    setEditingId(null);
+    setSaveError(undefined);
+    if (imageUrl && imageElementRef.current?.complete && imageElementRef.current.naturalWidth > 0) setLoadedImageUrl(imageUrl);
+  }, [imageUrl]);
   const editable = mode === "edit";
   const canEdit = editable && !saving && !disabledReason && imageLoaded;
   const canDraw = canEdit && !editingId;
@@ -198,7 +207,7 @@ export default function ImageAnnotationViewer({ mode, imageUrl, imageTitle, anno
           onMouseMove={updateRect}
           onMouseUp={finishRect}
         >
-            <img onLoad={() => setImageLoaded(true)} onError={() => setImageLoaded(false)} src={imageUrl} alt={imageTitle || "reference"} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} draggable={false} />
+            <img ref={imageElementRef} onLoad={() => setLoadedImageUrl(imageUrl)} onError={() => setLoadedImageUrl(undefined)} src={imageUrl} alt={imageTitle || "reference"} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} draggable={false} />
             {visible && [...items, ...(draftRect ? [draftRect] : [])].map((item, index) => {
               const color = colorHex(item.color);
               if (item.type === "point") {
