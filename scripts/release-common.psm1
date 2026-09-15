@@ -82,4 +82,45 @@ function Copy-TianjiPhysicalDirectory {
   Assert-TianjiNoReparsePoint -Path $Destination
 }
 
+function Copy-TianjiRuntimeNodeModules {
+  param([Parameter(Mandatory=$true)][string]$Source,[Parameter(Mandatory=$true)][string]$Destination)
+  # npm workspaces create @tianji junctions to source packages. Server runtime
+  # has no @tianji runtime imports, so exclude those links and copy the complete
+  # physical production dependency tree into the release.
+  & robocopy $Source $Destination /E /XD '@tianji' /COPY:DAT /DCOPY:DAT /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -gt 7) { throw "Runtime dependency copy failed ($LASTEXITCODE): $Source -> $Destination" }
+  Assert-TianjiNoReparsePoint -Path $Destination
+}
+
+function Resolve-TianjiReleaseModule {
+  param([Parameter(Mandatory=$true)][string]$ReleaseRoot,[Parameter(Mandatory=$true)][string]$WorkingDirectory,[Parameter(Mandatory=$true)][string]$ModuleName)
+  $releasePath=(Resolve-Path -LiteralPath $ReleaseRoot).Path
+  $workingPath=(Resolve-Path -LiteralPath $WorkingDirectory).Path
+  if(-not $workingPath.StartsWith($releasePath,[StringComparison]::OrdinalIgnoreCase)){throw "Runtime working directory escapes release: $workingPath"}
+  $resolver='const fs=require("fs"),path=require("path");const root=fs.realpathSync(process.argv[1]);const resolved=fs.realpathSync(require.resolve(process.argv[2]));if(!resolved.toLowerCase().startsWith(root.toLowerCase()+path.sep)){throw new Error("Resolved outside release: "+resolved)};process.stdout.write(resolved);'
+  Push-Location $workingPath
+  try {
+    $resolved=(& node.exe -e $resolver $releasePath $ModuleName 2>&1 | Out-String).Trim()
+    if($LASTEXITCODE -ne 0){throw "Unable to resolve $ModuleName from ${workingPath}: $resolved"}
+    return $resolved
+  } finally { Pop-Location }
+}
+
+function Get-TianjiReleaseRuntimeDependencySources {
+  param([Parameter(Mandatory=$true)][string]$Release)
+  $releaseRoot=Get-TianjiReleasePath $Release
+  $serverRoot=Join-Path $releaseRoot 'server'
+  $webRoot=Join-Path $releaseRoot 'web/.next/standalone/apps/web'
+  $generatedPrisma=Join-Path $releaseRoot 'node_modules/.prisma/client/index.js'
+  if(-not(Test-Path -LiteralPath $generatedPrisma)){throw "Generated Prisma Client is missing from release: $generatedPrisma"}
+  if(-not(Test-Path -LiteralPath (Join-Path $releaseRoot 'web/.next/static'))){throw 'Web static assets are missing from release.'}
+  [ordered]@{
+    serverNestCore=Resolve-TianjiReleaseModule $releaseRoot $serverRoot '@nestjs/core'
+    serverPrismaClient=Resolve-TianjiReleaseModule $releaseRoot $serverRoot '@prisma/client'
+    serverGeneratedPrisma=(Resolve-Path -LiteralPath $generatedPrisma).Path
+    webNext=Resolve-TianjiReleaseModule $releaseRoot $webRoot 'next'
+    webReact=Resolve-TianjiReleaseModule $releaseRoot $webRoot 'react'
+  }
+}
+
 Export-ModuleMember -Function *-Tianji*
