@@ -84,7 +84,7 @@ export class WeeklyOperationsApprovalPlansService {
       this.prisma.weeklyOperationsApprovalPlan.findUnique({ where: { managerId_weekStart: { managerId: userId, weekStart: range.start } } }),
       this.prisma.weeklyOperationsApprovalPlanItem.findMany({ where: { removedAt: null }, select: { decreeId: true } }),
       this.prisma.task.findMany({
-        where: { workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] }, deletedAt: null },
+        where: { workflowStatus: "OPS_APPROVED", deletedAt: null },
         include: {
           store: { select: { name: true } },
           requirementType: { select: { name: true } },
@@ -127,9 +127,9 @@ export class WeeklyOperationsApprovalPlansService {
       const [existingOnPlan, activeMemberships, decrees] = await Promise.all([
         tx.weeklyOperationsApprovalPlanItem.findMany({ where: { planId: plan.id, decreeId: { in: decreeIds } }, select: { decreeId: true } }),
         tx.weeklyOperationsApprovalPlanItem.findMany({ where: { decreeId: { in: decreeIds }, removedAt: null }, select: { decreeId: true, planId: true } }),
-        tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] }, deletedAt: null }, select: { id: true, serialNumber: true } }),
+        tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: "OPS_APPROVED", deletedAt: null }, select: { id: true, serialNumber: true } }),
       ]);
-      if (decrees.length !== decreeIds.length) throw new BadRequestException("Only pending or approved operations decrees can be added to a plan");
+      if (decrees.length !== decreeIds.length) throw new BadRequestException("Only operations-approved decrees can be added to a plan");
       if (existingOnPlan.length || activeMemberships.length) throw new ConflictException("One or more decrees are already in an active weekly approval plan");
       const activeCount = await tx.weeklyOperationsApprovalPlanItem.count({ where: { planId: plan.id, removedAt: null } });
       const sourceType = this.sourceFor(range, activeCount);

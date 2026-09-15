@@ -1,7 +1,7 @@
 'use client';
 
 import { ClipboardEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, Upload, message } from "antd";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, message } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, MoreOutlined, RollbackOutlined, SaveOutlined, SendOutlined, StopOutlined, UploadOutlined } from "@ant-design/icons";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import ImageAnnotationViewer from "@/components/ImageAnnotationViewer";
@@ -10,6 +10,7 @@ import { displayName, displayRequester, displayUserName } from "@/lib/display";
 import { useImageAnnotations } from "@/hooks/useImageAnnotations";
 import { useAttachmentImages } from "@/hooks/useAttachmentImages";
 import { useDashboardRefresh } from "@/hooks/useDashboardRefresh";
+import { returnToPreviousDashboardPage } from "@/lib/dashboard-navigation";
 import { DetailSection, SecondaryEmptyState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from "@/components/secondary-page";
 import styles from "./page.module.css";
 
@@ -183,6 +184,25 @@ const AttachmentGallery = ({ items, sourceType, allowDelete, emptyText, onOpen, 
   ) : <Text type="secondary">{emptyText}</Text>
 );
 
+const UploadButton = ({ label, onFile }: { label: string; onFile: (file: File) => Promise<void> }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return <>
+    <input
+      ref={inputRef}
+      type="file"
+      accept="image/jpeg,image/png,image/webp,image/gif"
+      style={{ display: "none" }}
+      onChange={(event) => {
+        const file = event.currentTarget.files?.[0];
+        // Reset first so selecting the same image again still emits change.
+        event.currentTarget.value = "";
+        if (file) void onFile(file);
+      }}
+    />
+    <Button size="small" icon={<UploadOutlined />} onClick={() => inputRef.current?.click()}>{label}</Button>
+  </>;
+};
+
 export default function FazhiDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -208,6 +228,7 @@ export default function FazhiDetailPage() {
   const [annotationExpanded, setAnnotationExpanded] = useState(false);
   const loadAttachmentImage = useAttachmentImages();
   const taskReadVersion = useRef(0);
+  const uploadInFlightFiles = useRef(new WeakSet<File>());
 
   const role = currentUser?.role || "";
   const isAdmin = ["OWNER", "SUPER_ADMIN"].includes(role);
@@ -360,17 +381,9 @@ export default function FazhiDetailPage() {
 
   const goBack = () => {
     const leave = () => {
-      if (isDesigner) {
-        router.push("/dashboard/fazhi?scope=processing");
-        return;
-      }
       const returnTo = searchParams.get("returnTo");
-      if (isOperator && returnTo?.startsWith("/dashboard/fazhi")) {
-        router.push(returnTo);
-        return;
-      }
-      if (typeof window !== "undefined" && window.history.length > 1) router.back();
-      else router.push("/dashboard/fazhi");
+      const fallback = isDesigner ? "/dashboard/fazhi?scope=processing" : isOperator && returnTo?.startsWith("/dashboard/fazhi") ? returnTo : "/dashboard/fazhi";
+      returnToPreviousDashboardPage(router, fallback, returnTo || undefined);
     };
     if (!hasUnsavedChanges) {
       leave();
@@ -475,10 +488,12 @@ export default function FazhiDetailPage() {
   };
 
   const uploadImageAttachment = async (row: any, category: string, file: File) => {
+    if (uploadInFlightFiles.current.has(file)) return;
+    uploadInFlightFiles.current.add(file);
     const hideUploading = message.loading("附件上传中，请稍候…", 0);
     try {
       const saved = await saveRowPatch(row, false);
-      if (!saved) return Upload.LIST_IGNORE;
+      if (!saved) return;
       const res = await attachmentApi.uploadImageTask(row.id, category, file);
       const attachment = res.data.data || res.data;
       if (!Number.isSafeInteger(attachment?.id) || attachment.imageTaskId !== row.id) throw new Error("Invalid attachment response");
@@ -495,16 +510,10 @@ export default function FazhiDetailPage() {
       console.error("[fazhi-detail] upload image attachment failed", err);
       message.error(getErrorMessage(err, "上传失败，请稍后重试"));
     } finally {
+      uploadInFlightFiles.current.delete(file);
       hideUploading();
     }
-    return Upload.LIST_IGNORE;
   };
-
-  const UploadButton = ({ label, onFile }: { label: string; onFile: (file: File) => Promise<any> }) => (
-    <Upload showUploadList={false} beforeUpload={(file) => onFile(file)}>
-      <Button size="small" icon={<UploadOutlined />}>{label}</Button>
-    </Upload>
-  );
 
   const saveTaskLinks = async () => {
     try {
@@ -791,6 +800,7 @@ export default function FazhiDetailPage() {
       return;
     }
     event.preventDefault();
+    event.stopPropagation();
     const extension = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1] || "png";
     const file = new File([blob], `pasted-${Date.now()}.${extension}`, { type: blob.type });
     await uploadImageAttachment(selectedImageTask, category, file);

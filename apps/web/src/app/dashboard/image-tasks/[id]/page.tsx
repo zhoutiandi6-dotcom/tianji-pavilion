@@ -8,6 +8,7 @@ import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDe
 import { formatShanghaiDateTime } from '@/lib/shanghai-week';
 import { useDashboardRefresh } from '@/hooks/useDashboardRefresh';
 import { useAttachmentImages } from '@/hooks/useAttachmentImages';
+import { returnToPreviousDashboardPage } from '@/lib/dashboard-navigation';
 import { DetailSection, SecondaryEmptyState, SecondaryErrorState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from '@/components/secondary-page';
 import styles from './page.module.css';
 
@@ -354,7 +355,7 @@ export default function ImageTaskDetailPage() {
         title={detail.name || `图片任务 #${detail.imageIndex}`}
         subtitle={`所属法旨 ${detail.decree.serialNumber || '-'} · ${detail.decree.productCode || '-'}`}
         meta={<div className={styles.headerMeta}><SecondaryStatusTag status={detail.status} /><span>店铺：{detail.decree.store?.name || '-'}</span><span>设计师：{detail.people.designer?.displayName || '-'}</span><span>最近更新：{formatShanghaiDateTime(detail.updatedAt) || '-'}</span></div>}
-        actions={[{ key: 'back', label: '返回', icon: <ArrowLeftOutlined />, onClick: () => router.push(returnPath) }]}
+        actions={[{ key: 'back', label: '返回', icon: <ArrowLeftOutlined />, onClick: () => returnToPreviousDashboardPage(router, returnPath, searchParams.get('returnTo') || undefined) }]}
       />
 
       {error ? <div className={styles.refreshWarning}><Text type="warning">{error}，当前展示上一次成功加载的数据。</Text></div> : null}

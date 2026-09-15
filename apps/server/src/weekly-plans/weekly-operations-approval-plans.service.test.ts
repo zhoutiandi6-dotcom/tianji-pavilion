@@ -62,7 +62,18 @@ describe("WeeklyOperationsApprovalPlansService", () => {
 
     expect(result.items).toEqual([expect.objectContaining({ id: 11, workflowStatus: "OPS_APPROVED" })]);
     expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED"] } }),
+      where: expect.objectContaining({ workflowStatus: "OPS_APPROVED" }),
+    }));
+  });
+
+  it("rejects a submitted decree even when a caller bypasses the candidate list", async () => {
+    prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
+    prisma.task.findMany.mockResolvedValue([]);
+
+    await expect(service.addDecrees({ weekStart: currentWeekStart(), decreeIds: [11] }, 9, "OPERATION_MANAGER"))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ workflowStatus: "OPS_APPROVED" }),
     }));
   });
 
