@@ -21,6 +21,7 @@ try {
   try {
     $nativeErrorPreference=$ErrorActionPreference;$ErrorActionPreference='Continue'
     & npm.cmd ci 1> (Join-Path $target 'npm-ci.stdout.log') 2> (Join-Path $target 'npm-ci.stderr.log');$nativeExit=$LASTEXITCODE; if($nativeExit -ne 0){$ErrorActionPreference=$nativeErrorPreference;throw 'Isolated dependency install failed'}
+    & npm.cmd run db:generate -w '@tianji/server' 1> (Join-Path $target 'prisma-generate.stdout.log') 2> (Join-Path $target 'prisma-generate.stderr.log');$nativeExit=$LASTEXITCODE; if($nativeExit -ne 0){$ErrorActionPreference=$nativeErrorPreference;throw 'Prisma Client generation failed'}
     $env:DATABASE_URL='file:D:/TianjiTestData/database/tianji.db';$env:TIANJI_DATA_ROOT='D:\TianjiTestData'
     & npm.cmd test -w '@tianji/server' -- --runInBand 1> (Join-Path $target 'server-test.stdout.log') 2> (Join-Path $target 'server-test.stderr.log');$nativeExit=$LASTEXITCODE; if($nativeExit -ne 0){$ErrorActionPreference=$nativeErrorPreference;throw 'Server test failed'}
     & npm.cmd run build -w '@tianji/server' 1> (Join-Path $target 'server-build.stdout.log') 2> (Join-Path $target 'server-build.stderr.log');$nativeExit=$LASTEXITCODE; if($nativeExit -ne 0){$ErrorActionPreference=$nativeErrorPreference;throw 'Server build failed'}

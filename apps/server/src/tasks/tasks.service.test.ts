@@ -188,7 +188,7 @@ describe("TasksService compatible product mapping", () => {
       },
       user: { findMany: jest.fn().mockResolvedValue([{ id: 9, username: "manager", displayName: "设计主管" }]) },
     };
-    const service = new TasksService(prisma, {} as any, {} as any, {} as any, {} as any);
+    const service = new TasksService(prisma, {} as any, {} as any, new TaskVisibilityService(), {} as any);
 
     const result = await service.findOne(10, "DESIGNER", 7) as any;
 
