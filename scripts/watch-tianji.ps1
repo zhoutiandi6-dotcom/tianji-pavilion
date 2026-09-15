@@ -14,7 +14,7 @@ $maxRestarts = 3
 $restartWindow = [TimeSpan]::FromMinutes(10)
 $failureCounts = @{ frontend = 0; backend = 0 }
 $restartHistory = @{ frontend = @(); backend = @() }
-$mutex = Get-TianjiMutex -Name "watchdog"
+$mutex = Get-TianjiMutex -Name ("watchdog." + ($Root -replace '[^A-Za-z0-9]', '_'))
 
 function Get-WatchdogServiceUrl([string]$Service) {
   if ($Service -eq "frontend") { return "http://127.0.0.1:$FrontendPort/login" }
