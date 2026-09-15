@@ -34,13 +34,20 @@ try {
     Copy-TianjiPhysicalDirectory (Join-Path $prismaSnapshot '.prisma/client') (Join-Path $source 'node_modules/.prisma/client')
     $ErrorActionPreference=$nativeErrorPreference
   } finally { $ErrorActionPreference=$nativeErrorPreference;$env:DATABASE_URL=$savedDatabaseUrl;$env:TIANJI_DATA_ROOT=$savedDataRoot;Pop-Location }
-  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/dist') (Join-Path $target 'server/dist')
-  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/web/.next') (Join-Path $target 'web/.next')
-  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/prisma') (Join-Path $target 'server/prisma')
+  # A release is its own production runtime unit: canonical apps/ layout,
+  # physical runtime dependencies and only the scripts needed to launch/watch it.
+  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/dist') (Join-Path $target 'apps/server/dist')
+  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/web/.next') (Join-Path $target 'apps/web/.next')
+  Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/prisma') (Join-Path $target 'apps/server/prisma')
   Copy-TianjiRuntimeNodeModules (Join-Path $source 'node_modules') (Join-Path $target 'node_modules')
+  New-Item -ItemType Directory -Path (Join-Path $target 'scripts') -Force | Out-Null
+  foreach($scriptName in @('start-tianji.ps1','watch-tianji.ps1','stop-tianji.ps1','tianji-runtime.psm1')){
+    Copy-Item -LiteralPath (Join-Path $source "scripts/$scriptName") -Destination (Join-Path $target "scripts/$scriptName") -Force
+  }
   $migrationNames=@(Get-ChildItem (Join-Path $source 'apps/server/prisma/migrations') -Directory | Select-Object -ExpandProperty Name)
-  $manifest=[ordered]@{releaseId=$Release;createdAt=(Get-Date).ToUniversalTime().ToString('o');gitCommit=(& git -C $root rev-parse HEAD).Trim();packageLockHash=(Get-TianjiSha256 (Join-Path $source 'package-lock.json'));migrations=$migrationNames;hashes=[ordered]@{serverMain=(Get-TianjiSha256 (Join-Path $target 'server/dist/main.js'));webServer=(Get-TianjiSha256 (Join-Path $target 'web/.next/standalone/apps/web/server.js'));webBuildId=(Get-TianjiSha256 (Join-Path $target 'web/.next/BUILD_ID'))};server=Get-TianjiTreeStats (Join-Path $target 'server/dist');web=Get-TianjiTreeStats (Join-Path $target 'web/.next')}
+  $manifest=[ordered]@{releaseId=$Release;createdAt=(Get-Date).ToUniversalTime().ToString('o');gitCommit=(& git -C $root rev-parse HEAD).Trim();packageLockHash=(Get-TianjiSha256 (Join-Path $source 'package-lock.json'));migrations=$migrationNames;runtime=[ordered]@{webRoot=(Join-Path $target 'apps/web');serverRoot=(Join-Path $target 'apps/server');nodeModulesRoot=(Join-Path $target 'node_modules');startScript=(Join-Path $target 'scripts/start-tianji.ps1');watchdogScript=(Join-Path $target 'scripts/watch-tianji.ps1');webEntry=(Join-Path $target 'apps/web/.next/standalone/apps/web/server.js');serverEntry=(Join-Path $target 'apps/server/dist/main.js')};hashes=[ordered]@{serverMain=(Get-TianjiSha256 (Join-Path $target 'apps/server/dist/main.js'));webServer=(Get-TianjiSha256 (Join-Path $target 'apps/web/.next/standalone/apps/web/server.js'));webBuildId=(Get-TianjiSha256 (Join-Path $target 'apps/web/.next/BUILD_ID'))};server=Get-TianjiTreeStats (Join-Path $target 'apps/server');web=Get-TianjiTreeStats (Join-Path $target 'apps/web')}
   $manifest|ConvertTo-Json -Depth 8|Set-Content (Join-Path $target 'release.json') -Encoding utf8
+  $manifest|ConvertTo-Json -Depth 8|Set-Content (Join-Path $target 'release-manifest.json') -Encoding utf8
   Assert-TianjiRelease $Release|Out-Null
   Write-Host 'RELEASE_CREATED'
 } catch {

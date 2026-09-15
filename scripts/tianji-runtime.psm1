@@ -6,6 +6,11 @@ $script:TianjiLogLimitBytes = 1024KB
 
 function Get-TianjiRuntimeDirectory { $script:TianjiRuntimeDirectory }
 function Get-TianjiStateFile { $script:TianjiStateFile }
+function Set-TianjiRuntimeDirectory {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $script:TianjiRuntimeDirectory = [IO.Path]::GetFullPath($Path)
+  $script:TianjiStateFile = Join-Path $script:TianjiRuntimeDirectory "runtime-state.json"
+}
 
 function Get-TianjiDurableStateFile {
   param([Parameter(Mandatory = $true)][string]$Root)
@@ -426,7 +431,8 @@ function Get-TianjiFirewallRules {
 function Start-TianjiServiceProcess {
   param(
     [Parameter(Mandatory = $true)][ValidateSet("frontend", "backend")][string]$Service,
-    [Parameter(Mandatory = $true)][string]$Root
+    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][int]$Port
   )
   Initialize-TianjiRuntime
   $relativeWorkingDirectory = if ($Service -eq "frontend") { "apps\\web" } else { "apps\\server" }
@@ -447,7 +453,7 @@ function Start-TianjiServiceProcess {
     $env:HOSTNAME = "0.0.0.0"
     $env:TIANJI_DATA_ROOT = $dataConfig.DataRoot
     $env:DATABASE_URL = $dataConfig.DatabaseUrl
-    if ($Service -eq "frontend") { $env:PORT = "3000" } else { $env:SERVER_PORT = "3001" }
+    if ($Service -eq "frontend") { $env:PORT = "$Port" } else { $env:SERVER_PORT = "$Port" }
     $process = Start-Process -FilePath "node.exe" -WorkingDirectory $workingDirectory -WindowStyle Hidden -ArgumentList $arguments -RedirectStandardOutput $output -RedirectStandardError $error -PassThru
   } finally {
     $env:HOSTNAME = $oldHost
@@ -467,7 +473,7 @@ function Start-TianjiServiceProcess {
     commandLine = $snapshot.CommandLine
     workingDirectory = $workingDirectory
     service = $Service
-    port = if ($Service -eq "frontend") { 3000 } else { 3001 }
+    port = $Port
   }
   Write-TianjiLifecycleEvent -Root $Root -Event ([pscustomobject]@{
     at = (Get-Date).ToUniversalTime().ToString("o")

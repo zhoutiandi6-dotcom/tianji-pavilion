@@ -35,14 +35,14 @@ function Assert-TianjiRelease {
   $root = Get-TianjiReleasePath $Release
   $manifest = Read-TianjiReleaseManifest $Release
   if ($manifest.releaseId -ne $Release) { throw 'Release ID does not match manifest.' }
-  foreach ($relative in @('web/.next/standalone/apps/web/server.js','web/.next/BUILD_ID','web/.next/static','server/dist/main.js','server/prisma/schema.prisma')) {
+  foreach ($relative in @('apps/web/.next/standalone/apps/web/server.js','apps/web/.next/BUILD_ID','apps/web/.next/static','apps/server/dist/main.js','apps/server/prisma/schema.prisma','scripts/start-tianji.ps1','scripts/watch-tianji.ps1','scripts/tianji-runtime.psm1','release-manifest.json')) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relative))) { throw "Release is missing $relative" }
   }
   Assert-TianjiNoReparsePoint -Path $root
   $expected = $manifest.hashes
-  if ((Get-TianjiSha256 (Join-Path $root 'web/.next/standalone/apps/web/server.js')) -ne $expected.webServer) { throw 'Web server hash mismatch.' }
-  if ((Get-TianjiSha256 (Join-Path $root 'web/.next/BUILD_ID')) -ne $expected.webBuildId) { throw 'Web BUILD_ID hash mismatch.' }
-  if ((Get-TianjiSha256 (Join-Path $root 'server/dist/main.js')) -ne $expected.serverMain) { throw 'Server main hash mismatch.' }
+  if ((Get-TianjiSha256 (Join-Path $root 'apps/web/.next/standalone/apps/web/server.js')) -ne $expected.webServer) { throw 'Web server hash mismatch.' }
+  if ((Get-TianjiSha256 (Join-Path $root 'apps/web/.next/BUILD_ID')) -ne $expected.webBuildId) { throw 'Web BUILD_ID hash mismatch.' }
+  if ((Get-TianjiSha256 (Join-Path $root 'apps/server/dist/main.js')) -ne $expected.serverMain) { throw 'Server main hash mismatch.' }
   return $manifest
 }
 
@@ -109,11 +109,11 @@ function Resolve-TianjiReleaseModule {
 function Get-TianjiReleaseRuntimeDependencySources {
   param([Parameter(Mandatory=$true)][string]$Release)
   $releaseRoot=Get-TianjiReleasePath $Release
-  $serverRoot=Join-Path $releaseRoot 'server'
-  $webRoot=Join-Path $releaseRoot 'web/.next/standalone/apps/web'
+  $serverRoot=Join-Path $releaseRoot 'apps/server'
+  $webRoot=Join-Path $releaseRoot 'apps/web/.next/standalone/apps/web'
   $generatedPrisma=Join-Path $releaseRoot 'node_modules/.prisma/client/index.js'
   if(-not(Test-Path -LiteralPath $generatedPrisma)){throw "Generated Prisma Client is missing from release: $generatedPrisma"}
-  if(-not(Test-Path -LiteralPath (Join-Path $releaseRoot 'web/.next/static'))){throw 'Web static assets are missing from release.'}
+  if(-not(Test-Path -LiteralPath (Join-Path $releaseRoot 'apps/web/.next/static'))){throw 'Web static assets are missing from release.'}
   [ordered]@{
     serverNestCore=Resolve-TianjiReleaseModule $releaseRoot $serverRoot '@nestjs/core'
     serverPrismaClient=Resolve-TianjiReleaseModule $releaseRoot $serverRoot '@prisma/client'
@@ -121,6 +121,18 @@ function Get-TianjiReleaseRuntimeDependencySources {
     webNext=Resolve-TianjiReleaseModule $releaseRoot $webRoot 'next'
     webReact=Resolve-TianjiReleaseModule $releaseRoot $webRoot 'react'
   }
+}
+
+function Assert-TianjiReleaseRuntimePaths {
+  param([Parameter(Mandatory=$true)][string]$Release)
+  $root=(Resolve-Path -LiteralPath (Get-TianjiReleasePath $Release)).Path
+  $manifest=Assert-TianjiRelease $Release
+  $runtime=Get-TianjiReleaseRuntimeDependencySources $Release
+  foreach($path in @($runtime.serverNestCore,$runtime.serverPrismaClient,$runtime.serverGeneratedPrisma,$runtime.webNext,$runtime.webReact,$manifest.runtime.webRoot,$manifest.runtime.serverRoot,$manifest.runtime.startScript,$manifest.runtime.watchdogScript)){
+    $full=(Resolve-Path -LiteralPath $path).Path
+    if(-not $full.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)){throw "Release runtime path escapes release root: $full"}
+  }
+  return [ordered]@{webRuntimeRoot=(Join-Path $root 'apps/web');serverRuntimeRoot=(Join-Path $root 'apps/server');startScriptSource=(Join-Path $root 'scripts/start-tianji.ps1');watchdogScriptSource=(Join-Path $root 'scripts/watch-tianji.ps1');runtimeDependencies=$runtime}
 }
 
 Export-ModuleMember -Function *-Tianji*

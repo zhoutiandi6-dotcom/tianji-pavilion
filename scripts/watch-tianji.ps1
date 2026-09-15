@@ -1,9 +1,13 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Root
+  [Parameter(Mandatory = $true)][string]$Root,
+  [int]$FrontendPort = 3000,
+  [int]$BackendPort = 3001,
+  [string]$RuntimeDirectory
 )
 
 $ErrorActionPreference = "Continue"
 Import-Module (Join-Path $PSScriptRoot "tianji-runtime.psm1") -Force -DisableNameChecking
+if ($RuntimeDirectory) { Set-TianjiRuntimeDirectory -Path $RuntimeDirectory }
 
 $failureThreshold = 2
 $maxRestarts = 3
@@ -13,8 +17,8 @@ $restartHistory = @{ frontend = @(); backend = @() }
 $mutex = Get-TianjiMutex -Name "watchdog"
 
 function Get-WatchdogServiceUrl([string]$Service) {
-  if ($Service -eq "frontend") { return "http://127.0.0.1:3000/login" }
-  return "http://127.0.0.1:3001/api/health"
+  if ($Service -eq "frontend") { return "http://127.0.0.1:$FrontendPort/login" }
+  return "http://127.0.0.1:$BackendPort/api/health"
 }
 
 function Restart-WatchedService {
@@ -34,7 +38,7 @@ function Restart-WatchedService {
     Stop-TianjiRecordedProcess -Record $record -Label $Service -Root $Root | Out-Null
   }
 
-  $port = if ($Service -eq "frontend") { 3000 } else { 3001 }
+  $port = if ($Service -eq "frontend") { $FrontendPort } else { $BackendPort }
   $deadline = (Get-Date).AddSeconds(10)
   while ((Get-Date) -lt $deadline -and (Get-TianjiPortOccupant -Port $port)) { Start-Sleep -Milliseconds 250 }
   $occupant = Get-TianjiPortOccupant -Port $port
@@ -44,7 +48,7 @@ function Restart-WatchedService {
   }
 
   try {
-    $State.$Service = Start-TianjiServiceProcess -Service $Service -Root $Root
+    $State.$Service = Start-TianjiServiceProcess -Service $Service -Root $Root -Port $port
     $restartHistory[$Service] += $now
     $State.watchdogStatus = "running"
     Write-TianjiState -State $State -Root $Root
