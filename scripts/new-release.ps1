@@ -14,7 +14,7 @@ function Assert-TianjiMigrationBytes {
   $sourceMigrations = Join-Path $SourcePrismaRoot 'migrations'
   $artifactMigrations = Join-Path $ArtifactPrismaRoot 'migrations'
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
-    $relative = $sourceFile.FullName.Substring($sourceMigrations.Length).TrimStart('\', '/')
+    $relative = [System.IO.Path]::GetRelativePath($sourceMigrations, $sourceFile.FullName)
     $artifactFile = Join-Path $artifactMigrations $relative
     if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
     $sourceHash = Get-TianjiSha256 $sourceFile.FullName
