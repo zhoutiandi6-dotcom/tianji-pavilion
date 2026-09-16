@@ -91,6 +91,8 @@ model User {
   operationLogs       OperationLog[]
   uploadedAttachments Attachment[]
   announcements       Announcement[]
+  submittedFeedback   PilotFeedback[] @relation("FeedbackSubmitter")
+  feedbackStatusHistory FeedbackStatusHistory[] @relation("FeedbackStatusOperator")
 
   @@index([roleId])
   @@map("users")
@@ -449,6 +451,7 @@ model Attachment {
   id            Int       @id @default(autoincrement())
   taskId        Int?
   imageTaskId   Int?
+  feedbackId    Int?
   category      String
   fileName      String
   fileType      String    @default("application/octet-stream")
@@ -465,10 +468,12 @@ model Attachment {
 
   task       Task?      @relation(fields: [taskId], references: [id])
   imageTask  ImageTask? @relation(fields: [imageTaskId], references: [id])
+  feedback   PilotFeedback? @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
   uploadedBy User       @relation(fields: [uploadedById], references: [id])
 
   @@index([taskId])
   @@index([imageTaskId])
+  @@index([feedbackId])
   @@index([category])
   @@index([uploadedById])
   @@index([deletedAt])
@@ -623,16 +628,42 @@ model PilotFeedback {
   userId      Int?
   role        String
   module      String
+  title       String?
   description String
   severity    String   @default("normal")
   suggestion  String?
-  status      String   @default("open")
+  status      String   @default("PENDING")
+  handlingNote String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  submitter   User? @relation("FeedbackSubmitter", fields: [userId], references: [id], onDelete: SetNull)
+  attachments Attachment[]
+  statusHistory FeedbackStatusHistory[]
+
   @@index([status])
+  @@index([userId])
   @@index([createdAt])
   @@map("pilot_feedback")
+}
+
+model FeedbackStatusHistory {
+  id           Int      @id @default(autoincrement())
+  feedbackId   Int
+  fromStatus   String
+  toStatus     String
+  operatorId   Int
+  operatorName String?
+  note         String?
+  createdAt    DateTime @default(now())
+
+  feedback     PilotFeedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  operator     User          @relation("FeedbackStatusOperator", fields: [operatorId], references: [id], onDelete: Restrict)
+
+  @@index([feedbackId])
+  @@index([operatorId])
+  @@index([createdAt])
+  @@map("feedback_status_history")
 }
 
 model ImageAnnotationDocument {

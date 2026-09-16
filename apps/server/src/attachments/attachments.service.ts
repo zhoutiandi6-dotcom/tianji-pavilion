@@ -13,6 +13,7 @@ const DESIGN_VISIBLE_TASK_STATUS = ["OPS_APPROVED", "DESIGN_ASSIGNED", "IN_DESIG
 const TASK_CATEGORIES = ["TASK_MATERIAL", "TASK_REFERENCE", "TASK_GENERAL"];
 const IMAGE_CATEGORIES = ["IMAGE_ORIGINAL", "IMAGE_REFERENCE", "IMAGE_COMPLETED"];
 const DESIGNER_COMPLETED_ATTACHMENT_STATUSES = ["IN_PROGRESS", "REVISION_REQUIRED"];
+const FEEDBACK_ROLES = ["OPERATION", "OPERATION_MANAGER", ...ADMIN_ROLES];
 
 @Injectable()
 export class AttachmentsService {
@@ -107,6 +108,14 @@ export class AttachmentsService {
     return this.prisma.attachment.findMany({ where: { imageTaskId, deletedAt: null }, orderBy: { uploadedAt: "desc" } });
   }
 
+  async findByFeedback(feedbackId: number, userId: number, userRole: string) {
+    if (!Number.isSafeInteger(userId) || userId <= 0) throw new ForbiddenException("No permission to view feedback attachments");
+    if (!FEEDBACK_ROLES.includes(userRole)) throw new ForbiddenException("No permission to view feedback attachments");
+    const feedback = await this.prisma.pilotFeedback.findUnique({ where: { id: feedbackId } });
+    if (!feedback) throw new NotFoundException("Feedback not found");
+    return this.prisma.attachment.findMany({ where: { feedbackId, deletedAt: null }, orderBy: { uploadedAt: "asc" } });
+  }
+
   async uploadTaskAttachment(taskId: number, category: string, file: any, userId: number, userRole: string, req?: any) {
     if (!TASK_CATEGORIES.includes(category)) throw new BadRequestException("Invalid task attachment category");
     if (!file) throw new BadRequestException("File is required");
@@ -199,10 +208,32 @@ export class AttachmentsService {
     return attachment;
   }
 
+  async uploadFeedbackAttachment(feedbackId: number, file: any, userId: number, userRole: string, req?: any) {
+    if (!FEEDBACK_ROLES.includes(userRole)) throw new ForbiddenException("No permission to upload feedback attachments");
+    if (!file) throw new BadRequestException("File is required");
+    if (!String(file.mimetype || "").startsWith("image/")) throw new BadRequestException("仅支持图片截图");
+    const feedback = await this.prisma.pilotFeedback.findUnique({ where: { id: feedbackId } });
+    if (!feedback) throw new NotFoundException("Feedback not found");
+    if (!ADMIN_ROLES.includes(userRole) && feedback.userId !== userId) throw new ForbiddenException("只能为本人反馈上传截图");
+    const stored = await this.storeFile(file);
+    try {
+      const attachment = await this.prisma.attachment.create({ data: {
+        feedbackId, category: "FEEDBACK_SCREENSHOT", fileName: file.originalname || stored.fileName,
+        fileType: file.mimetype, mimeType: file.mimetype, extension: stored.extension,
+        fileSize: file.size || file.buffer?.length || 0, storagePath: stored.storagePath, uploadedById: userId,
+      } });
+      await this.writeUploadLog("FEEDBACK_SCREENSHOT", attachment.id, attachment.fileName, userId, req);
+      return attachment;
+    } catch (error) {
+      try { await unlink(join(this.uploadRoot, stored.fileName)); } catch { /* preserve database error */ }
+      throw error;
+    }
+  }
+
   async getDownload(id: number, userId: number, userRole: string) {
     const attachment = await this.prisma.attachment.findUnique({
       where: { id },
-      include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } } },
+      include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } }, feedback: true },
     });
     if (!attachment || attachment.deletedAt) throw new NotFoundException("Attachment not found");
     if (!this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to download attachment");
@@ -219,7 +250,7 @@ export class AttachmentsService {
   async remove(id: number, userId: number, userRole: string) {
     const attachment = await this.prisma.attachment.findUnique({
       where: { id },
-      include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } } },
+      include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } }, feedback: true },
     });
     if (!attachment || attachment.deletedAt) throw new NotFoundException("Attachment not found");
     if (!this.canDeleteAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to delete attachment");
@@ -272,6 +303,7 @@ export class AttachmentsService {
   private canViewAttachment(attachment: any, userId: number, userRole: string) {
     if (attachment.taskId) return this.canViewTask(attachment.task, userId, userRole) && userRole !== "DESIGNER";
     if (attachment.imageTaskId) return this.canViewImageTask(attachment.imageTask, userId, userRole);
+    if (attachment.feedbackId) return FEEDBACK_ROLES.includes(userRole);
     return false;
   }
 
@@ -293,6 +325,7 @@ export class AttachmentsService {
 
   private canDeleteAttachment(attachment: any, userId: number, userRole: string) {
     if (ADMIN_ROLES.includes(userRole)) return true;
+    if (attachment.feedbackId) return attachment.uploadedById === userId;
     if (attachment.taskId) return this.canUploadTaskAttachment(attachment.task, userId, userRole);
     if (!attachment.imageTaskId) return false;
     return this.canUploadImageTaskAttachment(attachment.imageTask, attachment.category, userId, userRole);
@@ -314,6 +347,7 @@ export class AttachmentsService {
       IMAGE_ORIGINAL: "upload_image_original_attachment",
       IMAGE_REFERENCE: "upload_image_reference_attachment",
       IMAGE_COMPLETED: "upload_completed_attachment",
+      FEEDBACK_SCREENSHOT: "upload_feedback_screenshot",
     };
     await this.log.log({
       userId,

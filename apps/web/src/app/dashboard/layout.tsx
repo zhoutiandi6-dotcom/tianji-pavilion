@@ -34,6 +34,7 @@ const getMenuItems = (role: string) => {
       ...common,
       { key: "/dashboard/fazhi?view=all", icon: <FileTextOutlined />, label: "我的法旨" },
       { key: "/dashboard/fazhi/new", icon: <FileTextOutlined />, label: "新建法旨" },
+      { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈中心" },
       notifications,
     ];
   }
@@ -44,6 +45,7 @@ const getMenuItems = (role: string) => {
       fazhiCenter,
       { key: "/dashboard/fazhi?scope=ops-approvals", icon: <FileTextOutlined />, label: "待我审批" },
       { key: "/dashboard/weekly-operations-approval-plans", icon: <FileTextOutlined />, label: "本周审批计划" },
+      { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈中心" },
       notifications,
     ];
   }
@@ -191,7 +193,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         <Content style={{ marginLeft: collapsed ? 80 : 220, padding: 24, minHeight: "calc(100vh - 64px)", transition: "margin-left 0.2s", background: "#f5f5f5" }}>
           <BreadcrumbNav role={user?.role} />
           {children}
-          <FeedbackWidget />
+          {user && ["OPERATION", "OPERATION_MANAGER", "OWNER", "SUPER_ADMIN"].includes(user.role) && <FeedbackWidget />}
         </Content>
       </Layout>
     </Layout>

@@ -46,6 +46,11 @@ export class AttachmentsController {
     return this.service.findByImageTask(imageTaskId, req.user.sub, req.user.role);
   }
 
+  @Get("by-feedback/:feedbackId")
+  async findByFeedback(@Param("feedbackId", ParseIntPipe) feedbackId: number, @Request() req: any) {
+    return this.service.findByFeedback(feedbackId, req.user.sub, req.user.role);
+  }
+
   @Post("task/:taskId/upload")
   @UseInterceptors(FileInterceptor("file"))
   async uploadTask(
@@ -66,6 +71,16 @@ export class AttachmentsController {
     @Request() req: any,
   ) {
     return this.service.uploadImageTaskAttachment(imageTaskId, category, file, req.user.sub, req.user.role, req);
+  }
+
+  @Post("feedback/:feedbackId/upload")
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadFeedback(
+    @Param("feedbackId", ParseIntPipe) feedbackId: number,
+    @UploadedFile() file: any,
+    @Request() req: any,
+  ) {
+    return this.service.uploadFeedbackAttachment(feedbackId, file, req.user.sub, req.user.role, req);
   }
 
   @Get(":id/download")

@@ -213,6 +213,7 @@ export const attachmentApi = {
   saveAnnotations: (id: number, body: unknown) => api.put(`/attachments/${id}/annotations`, body),
   findByTask: (taskId: number) => api.get("/attachments/by-task/" + taskId),
   findByImageTask: (imageTaskId: number) => api.get("/attachments/by-image-task/" + imageTaskId),
+  findByFeedback: (feedbackId: number) => api.get("/attachments/by-feedback/" + feedbackId),
   uploadTask: (taskId: number, category: string, file: File) => {
     const form = new FormData();
     form.append("category", category);
@@ -224,6 +225,11 @@ export const attachmentApi = {
     form.append("category", category);
     form.append("file", file);
     return api.post("/attachments/image-task/" + imageTaskId + "/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
+  },
+  uploadFeedback: (feedbackId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post("/attachments/feedback/" + feedbackId + "/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
   },
   download: (id: number) => api.get("/attachments/" + id + "/download", { responseType: "blob" }),
   remove: (id: number) => api.delete("/attachments/" + id),
