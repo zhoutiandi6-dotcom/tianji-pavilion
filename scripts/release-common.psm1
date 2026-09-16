@@ -97,10 +97,10 @@ function Resolve-TianjiReleaseModule {
   $releasePath=(Resolve-Path -LiteralPath $ReleaseRoot).Path
   $workingPath=(Resolve-Path -LiteralPath $WorkingDirectory).Path
   if(-not $workingPath.StartsWith($releasePath,[StringComparison]::OrdinalIgnoreCase)){throw "Runtime working directory escapes release: $workingPath"}
-  $resolver='const fs=require("fs"),path=require("path");const root=fs.realpathSync(process.argv[1]);const resolved=fs.realpathSync(require.resolve(process.argv[2]));if(!resolved.toLowerCase().startsWith(root.toLowerCase()+path.sep)){throw new Error("Resolved outside release: "+resolved)};process.stdout.write(resolved);'
+  $resolver = Join-Path $PSScriptRoot 'resolve-release-module.cjs'
   Push-Location $workingPath
   try {
-    $resolved=(& node.exe -e $resolver $releasePath $ModuleName 2>&1 | Out-String).Trim()
+    $resolved=(& node.exe $resolver $releasePath $workingPath $ModuleName 2>&1 | Out-String).Trim()
     if($LASTEXITCODE -ne 0){throw "Unable to resolve $ModuleName from ${workingPath}: $resolved"}
     return $resolved
   } finally { Pop-Location }
