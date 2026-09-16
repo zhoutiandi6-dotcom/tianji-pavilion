@@ -2,6 +2,24 @@ param([Parameter(Mandatory=$true)][string]$Release)
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'release-common.psm1') -Force
+
+function Assert-TianjiMigrationBytes {
+  param(
+    [Parameter(Mandatory=$true)][string]$SourcePrismaRoot,
+    [Parameter(Mandatory=$true)][string]$ArtifactPrismaRoot
+  )
+  $sourceMigrations = Join-Path $SourcePrismaRoot 'migrations'
+  $artifactMigrations = Join-Path $ArtifactPrismaRoot 'migrations'
+  foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
+    $relative = $sourceFile.FullName.Substring($sourceMigrations.Length).TrimStart('\', '/')
+    $artifactFile = Join-Path $artifactMigrations $relative
+    if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
+    $sourceHash = Get-TianjiSha256 $sourceFile.FullName
+    $artifactHash = Get-TianjiSha256 $artifactFile
+    if ($sourceHash -ne $artifactHash) { throw "Artifact migration hash mismatch: $relative source=$sourceHash artifact=$artifactHash" }
+  }
+}
+
 if ($Release -notmatch '^[0-9]{8}-[0-9]{3}$') { throw 'Release must use yyyyMMdd-NNN, for example 20260911-001.' }
 if ((git -C $root status --porcelain)) { throw 'Working tree is not clean. Commit or stash before creating a release.' }
 $target=Get-TianjiReleasePath $Release
@@ -13,7 +31,8 @@ $prismaSnapshot=Join-Path $env:TEMP ("tianji-release-prisma-"+$Release+"-"+[Guid
 try {
   New-Item -ItemType Directory -Path $source -Force|Out-Null
   # Build from the committed snapshot. Never generate .next or dist in the live workspace.
-  & git -C $root archive --format=tar --output=$archive HEAD
+  # Archive raw Git bytes: global core.autocrlf must never rewrite migration SQL in a release.
+  & git -c core.autocrlf=false -C $root archive --format=tar --output=$archive HEAD
   if($LASTEXITCODE -ne 0 -or -not(Test-Path -LiteralPath $archive)){throw 'Unable to create isolated source archive'}
   & tar.exe -xf $archive -C $source
   if($LASTEXITCODE -ne 0){throw 'Unable to extract isolated source snapshot'}
@@ -39,6 +58,7 @@ try {
   Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/dist') (Join-Path $target 'apps/server/dist')
   Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/web/.next') (Join-Path $target 'apps/web/.next')
   Copy-TianjiPhysicalDirectory (Join-Path $source 'apps/server/prisma') (Join-Path $target 'apps/server/prisma')
+  Assert-TianjiMigrationBytes (Join-Path $source 'apps/server/prisma') (Join-Path $target 'apps/server/prisma')
   Copy-TianjiRuntimeNodeModules (Join-Path $source 'node_modules') (Join-Path $target 'node_modules')
   New-Item -ItemType Directory -Path (Join-Path $target 'scripts') -Force | Out-Null
   foreach($scriptName in @('start-tianji.ps1','watch-tianji.ps1','stop-tianji.ps1','tianji-runtime.psm1')){
