@@ -1,5 +1,6 @@
 param(
   [switch]$Automatic,
+  [switch]$Online,
   [switch]$StopServices,
   [switch]$RestartAfter,
   [switch]$NoPause
@@ -98,9 +99,13 @@ try {
       Write-Host "Tianji is already healthy; daily cold backup is skipped." -ForegroundColor Yellow
       return
     }
-    if (-not $StopServices) { throw "Tianji services are running. Re-run with -StopServices to create a cold backup." }
+    if ($Online) {
+      Write-Host "Tianji services are healthy; creating an SQLite Online Backup snapshot without stopping services." -ForegroundColor Green
+    } elseif (-not $StopServices) { throw "Tianji services are running. Re-run with -Online for a consistent SQLite snapshot or -StopServices for a cold backup." }
+    if (-not $Online) {
     & (Join-Path $PSScriptRoot "stop-tianji.ps1") -NoPause
     if (Test-TianjiServicesHealthy) { throw "Tianji services are still healthy after stop. Refusing to copy an active SQLite database." }
+    }
   }
 
   $batchId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
@@ -120,7 +125,7 @@ try {
   }
   $batchPath = Join-Path $batchesRoot $batchId
   Invoke-LocalBatchRotation -DataConfig $dataConfig
-  Write-BackupLog -Message "action=created batch=$batchId automatic=$Automatic" -DataConfig $dataConfig
+  Write-BackupLog -Message "action=created batch=$batchId automatic=$Automatic online=$Online" -DataConfig $dataConfig
   Write-Host "Verified Tianji backup batch: $batchPath" -ForegroundColor Green
   if ($RestartAfter) { & (Join-Path $PSScriptRoot "start-tianji.ps1") -NoBrowser }
 } catch {

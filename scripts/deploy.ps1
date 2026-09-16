@@ -8,14 +8,15 @@ function Invoke-Logged { param([scriptblock]$Command) & $Command 1>>$log 2>>$err
 try {
   $manifest=Assert-TianjiRelease $Release
   Invoke-Logged { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'deploy-check.ps1') -Release $Release }
-  # Backup remains an operational action. Application processes are never copied
-  # to or launched from this workspace; the release starts itself below.
-  Invoke-Logged { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'backup-tianji.ps1') -StopServices -NoPause }
-  $databaseBackup=(Get-ChildItem 'D:\TianjiData\backups\batches' -Directory|Sort-Object Name -Descending|Select-Object -First 1).FullName
-  if(-not $databaseBackup){throw 'No verified database backup was found after backup command.'}
+  # SQLite Online Backup creates and verifies a consistent snapshot while the
+  # current release remains healthy. It also proves that snapshot in isolation.
+  Invoke-Logged { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'production-backup-gate.ps1') -Release $Release -EvidencePath $evidence.Path }
+  $backupGate=Get-Content (Join-Path $evidence.Path 'backup-gate.json') -Raw|ConvertFrom-Json
+  if($backupGate.status -ne 'PASS'){throw 'Production online backup gate did not pass.'}
+  $databaseBackup=$backupGate.databaseBackup
   foreach($port in 3000,3001){if(-not(Test-TianjiPortReleased $port)){throw "Port $port was not released; refusing release switch."}}
   Write-TianjiDeploymentEvent $evidence.Path 'release-validated' @{release=$Release;gitCommit=$manifest.gitCommit;releaseRoot=$releaseRoot}
-  Write-TianjiDeploymentEvent $evidence.Path 'database-backup-verified' @{path=$databaseBackup}
+  Write-TianjiDeploymentEvent $evidence.Path 'database-backup-verified' @{path=$databaseBackup;attachments=$backupGate.attachmentsBackup;restoreRoot=$backupGate.restoreRoot}
   Invoke-Logged { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $releaseRoot 'scripts\start-tianji.ps1') -NoBrowser }
   if(-not(Wait-TianjiHttp200 'http://127.0.0.1:3001/api/health' 45)){throw 'Backend health check failed'}
   if(-not(Wait-TianjiHttp200 'http://127.0.0.1:3000/login' 75)){throw 'Frontend health check failed'}
