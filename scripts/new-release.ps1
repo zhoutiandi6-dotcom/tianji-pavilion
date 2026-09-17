@@ -15,12 +15,14 @@ function Assert-TianjiMigrationBytes {
   $artifactMigrations = (Resolve-Path -LiteralPath (Join-Path $ArtifactPrismaRoot 'migrations')).Path
   if ($sourceMigrations.EndsWith('\\')) { $sourceMigrations = $sourceMigrations.Substring(0, $sourceMigrations.Length - 1) }
   if ($artifactMigrations.EndsWith('\\')) { $artifactMigrations = $artifactMigrations.Substring(0, $artifactMigrations.Length - 1) }
+  Push-Location $sourceMigrations
+  try {
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
     # Path.GetRelativePath is unavailable in Windows PowerShell 5.1. Keep
     # the byte-for-byte migration verification compatible with the launcher.
     $sourceFullPath = (Resolve-Path -LiteralPath $sourceFile.FullName).Path
-    if ($sourceFullPath.Length -le $sourceMigrations.Length -or $sourceFullPath.Substring(0, $sourceMigrations.Length) -ine $sourceMigrations -or $sourceFullPath[$sourceMigrations.Length] -ne [IO.Path]::DirectorySeparatorChar) { throw "Migration source escapes root: root=$sourceMigrations source=$sourceFullPath" }
-    $relative = $sourceFullPath.Substring($sourceMigrations.Length + 1)
+    $relative = (Resolve-Path -LiteralPath $sourceFile.FullName -Relative) -replace '^[.\\/]+' , ''
+    if ([string]::IsNullOrWhiteSpace($relative) -or $relative -match '(^|[\\/])\.\.([\\/]|$)') { throw "Invalid migration relative path: $relative" }
     $artifactFile = Join-Path $artifactMigrations $relative
     Write-Host "migration-check source=$sourceFullPath relative=$relative artifact=$artifactFile sourceExists=$(Test-Path -LiteralPath $sourceFullPath) artifactExists=$(Test-Path -LiteralPath $artifactFile)"
     if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
@@ -28,6 +30,7 @@ function Assert-TianjiMigrationBytes {
     $artifactHash = Get-TianjiSha256 $artifactFile
     if ($sourceHash -ne $artifactHash) { throw "Artifact migration hash mismatch: $relative source=$sourceHash artifact=$artifactHash" }
   }
+  } finally { Pop-Location }
 }
 
 if ($Release -notmatch '^[0-9]{8}-[0-9]{3}$') { throw 'Release must use yyyyMMdd-NNN, for example 20260911-001.' }
