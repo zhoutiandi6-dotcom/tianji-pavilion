@@ -11,15 +11,17 @@ function Assert-TianjiMigrationBytes {
     [Parameter(Mandatory=$true)][string]$SourcePrismaRoot,
     [Parameter(Mandatory=$true)][string]$ArtifactPrismaRoot
   )
-  $sourceMigrations = Join-Path $SourcePrismaRoot 'migrations'
-  $artifactMigrations = Join-Path $ArtifactPrismaRoot 'migrations'
-  $pathSeparators = [char[]]@([char]92, [char]47)
-  $migrationRoot = (Resolve-Path -LiteralPath $sourceMigrations).Path.TrimEnd($pathSeparators)
+  $sourceMigrations = (Resolve-Path -LiteralPath (Join-Path $SourcePrismaRoot 'migrations')).Path.TrimEnd([char]92, [char]47)
+  $artifactMigrations = (Resolve-Path -LiteralPath (Join-Path $ArtifactPrismaRoot 'migrations')).Path.TrimEnd([char]92, [char]47)
+  $sourcePrefix = $sourceMigrations + [IO.Path]::DirectorySeparatorChar
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
     # Path.GetRelativePath is unavailable in Windows PowerShell 5.1. Keep
     # the byte-for-byte migration verification compatible with the launcher.
-    $relative = $sourceFile.FullName.Substring($migrationRoot.Length).TrimStart($pathSeparators)
+    $sourceFullPath = (Resolve-Path -LiteralPath $sourceFile.FullName).Path
+    if (-not $sourceFullPath.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Migration source escapes root: $sourceFullPath" }
+    $relative = $sourceFullPath.Substring($sourcePrefix.Length)
     $artifactFile = Join-Path $artifactMigrations $relative
+    Write-Host "migration-check source=$sourceFullPath relative=$relative artifact=$artifactFile sourceExists=$(Test-Path -LiteralPath $sourceFullPath) artifactExists=$(Test-Path -LiteralPath $artifactFile)"
     if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
     $sourceHash = Get-TianjiSha256 $sourceFile.FullName
     $artifactHash = Get-TianjiSha256 $artifactFile
