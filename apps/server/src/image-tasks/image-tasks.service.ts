@@ -466,7 +466,10 @@ export class ImageTasksService {
     await this.ensureDesigner(dto.designerId);
     const tasks = await this.prisma.task.findMany({ where: { id: { in: taskIds }, deletedAt: null }, include: { imageTasks: { where: { deletedAt: null } } } });
     if (tasks.length !== taskIds.length) throw new NotFoundException("存在法旨不存在或已删除");
-    const expectedWorkflow = dto.mode === "ASSIGN" ? "OPS_APPROVED" : "DESIGN_ASSIGNED";
+    // StateMachine calculates an assigned decree whose image tasks are all
+    // NOT_STARTED as IN_DESIGN. Reassignment must use that persisted task
+    // workflow together with the stricter image-task checks below.
+    const expectedWorkflow = dto.mode === "ASSIGN" ? "OPS_APPROVED" : "IN_DESIGN";
     if (tasks.some((task) => task.workflowStatus !== expectedWorkflow)) throw new ForbiddenException("所选法旨的状态不满足本次批量操作");
     if (dto.mode === "ASSIGN") await this.assertCurrentOperationsPlanAdmission(taskIds);
     const invalidTask = tasks.find((task) => {

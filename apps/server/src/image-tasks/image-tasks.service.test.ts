@@ -114,6 +114,31 @@ describe("ImageTasksService stage A audit writes", () => {
     expect(log.log).not.toHaveBeenCalled();
   });
 
+  it("reassigns an unstarted whole decree in its persisted IN_DESIGN workflow", async () => {
+    prisma.task.findMany.mockResolvedValue([{
+      id: 10,
+      workflowStatus: "IN_DESIGN",
+      imageTasks: [
+        imageTask({ id: 1, designerId: 5, status: "NOT_STARTED" }),
+        imageTask({ id: 2, designerId: 5, status: "NOT_STARTED" }),
+      ],
+    }]);
+
+    await service.batchAssignTasks({ taskIds: [10], designerId: 7, mode: "REASSIGN", reason: "工作负载调整" }, 9, "DESIGN_MANAGER");
+
+    expect(prisma.imageTask.update).toHaveBeenCalledTimes(2);
+    expect(weeklyPlans.addAssignedTasksInTransaction).toHaveBeenCalledWith(
+      prisma,
+      expect.arrayContaining([expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 })]),
+      7,
+      9,
+      expect.any(Date),
+      "REASSIGN",
+      undefined,
+      "工作负载调整",
+    );
+  });
+
   it("rejects assignment before the approved decree enters the current operations plan", async () => {
     prisma.task.findMany.mockResolvedValue([{ id: 10, workflowStatus: "OPS_APPROVED", imageTasks: [imageTask({ id: 1 })] }]);
     prisma.task.count.mockResolvedValue(0);
@@ -718,7 +743,7 @@ describe("ImageTasksService stage A audit writes", () => {
   it("flags historical mixed-designer decrees instead of silently overwriting them", async () => {
     prisma.task.findMany.mockResolvedValue([{
       id: 10,
-      workflowStatus: "DESIGN_ASSIGNED",
+      workflowStatus: "IN_DESIGN",
       imageTasks: [
         imageTask({ id: 1, designerId: 7, status: "NOT_STARTED" }),
         imageTask({ id: 2, designerId: 8, status: "NOT_STARTED" }),

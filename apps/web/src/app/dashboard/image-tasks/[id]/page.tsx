@@ -51,6 +51,10 @@ function unwrapDetail(response: { data: ImageTaskDetail | { data: ImageTaskDetai
   return 'data' in payload ? payload.data : payload;
 }
 
+function hasMeaningfulValue(value: unknown) {
+  return value !== null && value !== undefined && String(value).trim() !== '' && String(value).trim() !== '-';
+}
+
 function ReferenceThumbnail({ attachment, loadImage, onOpen }: { attachment: ImageTaskDetailAttachment; loadImage: (attachment: ImageTaskDetailAttachment) => Promise<string>; onOpen: () => void }) {
   const [url, setUrl] = useState('');
   const [failed, setFailed] = useState(false);
@@ -252,6 +256,24 @@ export default function ImageTaskDetailPage() {
     .reverse()
     .find((record) => ['design_review_rejected', 'design_review_reject', 'review_reject'].includes(record.action) && record.reason?.trim())
     ?.reason?.trim();
+  const coreInfo = [
+    { label: '产品型号', value: detail.decree.productCode },
+    { label: '需求类型', value: detail.decree.requirementType?.name || detail.imageType },
+    // The persisted store relation is the existing brand/store source for this workflow.
+    { label: '品牌', value: detail.decree.store?.name },
+    { label: '需求人', value: detail.people.requesterName || detail.people.operator.displayName },
+  ].filter((item) => hasMeaningfulValue(item.value));
+  const summaryItems = [
+    { label: '当前状态', value: <SecondaryStatusTag status={detail.status} /> },
+    { label: '优先级', value: detail.decree.priority === 'URGENT' ? '加急' : '普通' },
+    { label: '图片名称', value: detail.name },
+    { label: '当前设计师', value: detail.people.designer?.displayName },
+    { label: '提交时间', value: formatShanghaiDateTime(detail.submittedAt) },
+  ].filter((item) => item.label === '当前状态' || hasMeaningfulValue(item.value));
+  const requirementItems = [
+    { label: '需求说明', value: detail.requirementDescription },
+    { label: '修改要求', value: detail.modificationRequirement },
+  ].filter((item) => hasMeaningfulValue(item.value));
 
   const startDesign = async () => {
     if (!canStartDesign || actionRunningRef.current) return;
@@ -353,12 +375,20 @@ export default function ImageTaskDetailPage() {
       <SecondaryPageHeader
         breadcrumb={<span>工作台 / 图片任务详情</span>}
         title={detail.name || `图片任务 #${detail.imageIndex}`}
-        subtitle={`所属法旨 ${detail.decree.serialNumber || '-'} · ${detail.decree.productCode || '-'}`}
-        meta={<div className={styles.headerMeta}><SecondaryStatusTag status={detail.status} /><span>店铺：{detail.decree.store?.name || '-'}</span><span>设计师：{detail.people.designer?.displayName || '-'}</span><span>最近更新：{formatShanghaiDateTime(detail.updatedAt) || '-'}</span></div>}
+        subtitle={`所属法旨 ${detail.decree.serialNumber || '-'}`}
+        meta={<div className={styles.headerMeta}><SecondaryStatusTag status={detail.status} />{hasMeaningfulValue(detail.people.designer?.displayName) && <span>设计师：{detail.people.designer?.displayName}</span>}<span>最近更新：{formatShanghaiDateTime(detail.updatedAt) || '-'}</span></div>}
         actions={[{ key: 'back', label: '返回', icon: <ArrowLeftOutlined />, onClick: () => returnToPreviousDashboardPage(router, returnPath, searchParams.get('returnTo') || undefined) }]}
       />
 
       {error ? <div className={styles.refreshWarning}><Text type="warning">{error}，当前展示上一次成功加载的数据。</Text></div> : null}
+
+      {coreInfo.length ? (
+        <DetailSection title="核心信息">
+          <div className={styles.coreInfoGrid}>
+            {coreInfo.map((item) => <div className={styles.coreInfoItem} key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}
+          </div>
+        </DetailSection>
+      ) : null}
 
       {canReviewImageTask ? (
         <DetailSection title="设计主管审核">
@@ -456,55 +486,43 @@ export default function ImageTaskDetailPage() {
         </DetailSection>
       ) : null}
 
-      <DetailSection title="当前任务摘要">
+      {summaryItems.length ? <DetailSection title="当前任务摘要">
         <Descriptions className={styles.summaryGrid} bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
-          <Descriptions.Item label="当前状态"><SecondaryStatusTag status={detail.status} /></Descriptions.Item>
-          <Descriptions.Item label="需求类型">{detail.decree.requirementType?.name || detail.imageType || '-'}</Descriptions.Item>
-          <Descriptions.Item label="优先级">{detail.decree.priority === 'URGENT' ? '加急' : '普通'}</Descriptions.Item>
-          <Descriptions.Item label="图片名称">{detail.name || '-'}</Descriptions.Item>
-          <Descriptions.Item label="当前设计师">{detail.people.designer?.displayName || '-'}</Descriptions.Item>
-          <Descriptions.Item label="提交时间">{formatShanghaiDateTime(detail.submittedAt) || '-'}</Descriptions.Item>
-          <Descriptions.Item label="完成时间">-</Descriptions.Item>
-          <Descriptions.Item label="需求人">{detail.people.requesterName || detail.people.operator.displayName || '-'}</Descriptions.Item>
-          <Descriptions.Item label="所属店铺">{detail.decree.store?.name || '-'}</Descriptions.Item>
+          {summaryItems.map((item) => <Descriptions.Item label={item.label} key={item.label}>{item.value}</Descriptions.Item>)}
         </Descriptions>
-      </DetailSection>
+      </DetailSection> : null}
 
-      <DetailSection title="原始需求与说明">
+      {requirementItems.length ? <DetailSection title="原始需求与说明">
         <div className={styles.requirementGrid}>
-          <div><Text type="secondary">需求说明</Text><Paragraph className={styles.longText}>{detail.requirementDescription || '-'}</Paragraph></div>
-          <div><Text type="secondary">修改要求</Text><Paragraph className={styles.longText}>{detail.modificationRequirement || '-'}</Paragraph></div>
-          <div><Text type="secondary">所属法旨</Text><Paragraph className={styles.longText}>{detail.decree.serialNumber || '-'} · {detail.decree.productCode || '-'} · {detail.decree.store?.name || '-'}</Paragraph></div>
+          {requirementItems.map((item) => <div key={item.label}><Text type="secondary">{item.label}</Text><Paragraph className={styles.longText}>{item.value}</Paragraph></div>)}
         </div>
-      </DetailSection>
+      </DetailSection> : null}
 
-      <DetailSection title="原始附件与参考资料">
+      {detail.sourceAttachments.length ? <DetailSection title="原始附件与参考资料">
         <div className={styles.materialColumns}>
-          <div><h3>原图</h3>{attachmentList(originalAttachments, '暂无原图附件')}</div>
-          <div><h3>参考图</h3>{attachmentList(referenceAttachments, '暂无参考图附件')}</div>
+          {originalAttachments.length ? <div><h3>原图</h3>{attachmentList(originalAttachments, '暂无原图附件')}</div> : null}
+          {referenceAttachments.length ? <div><h3>参考图</h3>{attachmentList(referenceAttachments, '暂无参考图附件')}</div> : null}
         </div>
-      </DetailSection>
+      </DetailSection> : null}
 
-      <DetailSection title="设计完成稿">
-        {attachmentList(currentCompletedAttachment ? [currentCompletedAttachment] : [], '暂未上传完成稿')}
+      {currentCompletedAttachment ? <DetailSection title="设计完成稿">
+        {attachmentList([currentCompletedAttachment], '暂未上传完成稿')}
         {detail.completedAttachments.length > 1 ? (
           <p className={styles.completedArtworkMeta}>历史版本：{detail.completedAttachments.length - 1} 个，系统已保留。</p>
         ) : null}
-      </DetailSection>
+      </DetailSection> : null}
 
-      <DetailSection title="审核记录">
-        {detail.reviewHistory.length ? (
-          <div className={styles.historyList}>
-            {detail.reviewHistory.map((record, index) => (
-              <article className={styles.historyItem} key={`${record.source}-${record.action}-${record.createdAt}-${index}`}>
-                <div><strong>{reviewActionLabels[record.action] || record.action}</strong><span>{record.operator?.displayName || '-'}</span></div>
-                <time>{formatShanghaiDateTime(record.createdAt) || '-'}</time>
-                <p>{record.reason || '无备注'}</p>
-              </article>
-            ))}
-          </div>
-        ) : <SecondaryEmptyState description="暂无图片级审核记录" />}
-      </DetailSection>
+      {detail.reviewHistory.length ? <DetailSection title="审核记录">
+        <div className={styles.historyList}>
+          {detail.reviewHistory.map((record, index) => (
+            <article className={styles.historyItem} key={`${record.source}-${record.action}-${record.createdAt}-${index}`}>
+              <div><strong>{reviewActionLabels[record.action] || record.action}</strong><span>{record.operator?.displayName || '-'}</span></div>
+              <time>{formatShanghaiDateTime(record.createdAt) || '-'}</time>
+              <p>{record.reason || '无备注'}</p>
+            </article>
+          ))}
+        </div>
+      </DetailSection> : null}
 
       <Modal open={Boolean(preview)} title={preview?.title || '附件预览'} footer={null} onCancel={() => setPreview(null)} width={900}>
         {preview?.url ? <Image src={preview.url} alt={preview.title} preview={false} className={styles.previewImage} /> : null}

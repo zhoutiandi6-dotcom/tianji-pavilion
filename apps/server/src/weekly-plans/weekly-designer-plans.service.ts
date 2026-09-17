@@ -131,6 +131,23 @@ export class WeeklyDesignerPlansService {
     const decrees = [...new Map(visibleItems.map((item) => [item.imageTask.taskId, item])).values()].map((item) => {
       const decreeItems = visibleItems.filter((entry) => entry.imageTask.taskId === item.imageTask.taskId);
       const designerIds = [...new Set(decreeItems.map((entry) => entry.designerId))];
+      const allImageTasksUnstarted = decreeItems.every((entry) => entry.imageTask.status === "NOT_STARTED" && !!entry.imageTask.designerId);
+      const hasSingleCurrentDesigner = designerIds.length === 1 && decreeItems.every((entry) => entry.designerId === entry.imageTask.designerId);
+      const isReassignable = item.imageTask.task.workflowStatus === "IN_DESIGN" && allImageTasksUnstarted && hasSingleCurrentDesigner;
+      const businessStatusLabel = allImageTasksUnstarted ? "已分配待开始" : (() => {
+        const status = item.imageTask.task.workflowStatus;
+        if (status === "IN_DESIGN") return "设计中";
+        if (status === "DESIGN_REVIEW") return "待设计审核";
+        if (["DESIGN_APPROVED", "COMPLETED"].includes(status)) return "已完成";
+        return status === "OPS_APPROVED" ? "待设计分配" : "当前不可调整";
+      })();
+      const reassignDisabledReason = isReassignable
+        ? null
+        : item.imageTask.task.workflowStatus !== "IN_DESIGN"
+          ? `当前为${businessStatusLabel}，不允许调整分配`
+          : !allImageTasksUnstarted
+            ? "图片任务已开始或进入后续阶段，不能调整分配"
+            : "当前设计师关系异常，不能调整分配";
       return {
         taskId: item.imageTask.task.id,
         serialNumber: item.imageTask.task.serialNumber,
@@ -141,9 +158,12 @@ export class WeeklyDesignerPlansService {
         designerId: designerIds.length === 1 ? designerIds[0] : null,
         designerName: designerIds.length === 1 ? (decreeItems[0]?.designer.displayName || decreeItems[0]?.designer.username || "-") : "数据异常",
         workflowStatus: item.imageTask.task.workflowStatus,
+        businessStatusLabel,
         plannedAt: item.plannedAt,
         isAssignmentAnomaly: designerIds.length !== 1 || decreeItems.some((entry) => entry.designerId !== entry.imageTask.designerId),
         isCompleted: decreeItems.every((entry) => FINAL_IMAGE_TASK_STATUSES.includes(entry.imageTask.status)),
+        isReassignable,
+        reassignDisabledReason,
       };
     });
 

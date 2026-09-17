@@ -382,7 +382,9 @@ export default function FazhiDetailPage() {
   const goBack = () => {
     const leave = () => {
       const returnTo = searchParams.get("returnTo");
-      const fallback = isDesigner ? "/dashboard/fazhi?scope=processing" : isOperator && returnTo?.startsWith("/dashboard/fazhi") ? returnTo : "/dashboard/fazhi";
+      const fallback = returnTo?.startsWith("/dashboard/fazhi")
+        ? returnTo
+        : isDesigner ? "/dashboard/fazhi?scope=processing" : "/dashboard/fazhi";
       returnToPreviousDashboardPage(router, fallback, returnTo || undefined);
     };
     if (!hasUnsavedChanges) {
@@ -418,7 +420,7 @@ export default function FazhiDetailPage() {
     return row[key];
   };
 
-  const saveRowPatch = async (row: any, showToast = true) => {
+  const saveRowPatch = async (row: any, showToast = true, showError = true) => {
     const patch = editingRows[row.id] || {};
     if (!Object.keys(patch).length) {
       if (showToast) message.info("没有需要保存的修改");
@@ -435,7 +437,7 @@ export default function FazhiDetailPage() {
       return true;
     } catch (err) {
       console.error("[fazhi-detail] save image task failed", err);
-      message.error(getErrorMessage(err, "保存失败，请稍后重试"));
+      if (showError) message.error(getErrorMessage(err, "保存失败，请稍后重试"));
       return false;
     }
   };
@@ -515,17 +517,6 @@ export default function FazhiDetailPage() {
     }
   };
 
-  const saveTaskLinks = async () => {
-    try {
-      await taskApi.update(id, { materialLinks });
-      message.success("主单链接已保存");
-      loadTask();
-    } catch (err) {
-      console.error("[fazhi-detail] save task links failed", err);
-      message.error(getErrorMessage(err, "保存失败，请稍后重试"));
-    }
-  };
-
   const saveMainTask = async (showToast = true, reload = true) => {
     try {
       await taskApi.update(id, {
@@ -550,9 +541,23 @@ export default function FazhiDetailPage() {
     }
   };
 
-  const saveImageTask = async (row: any) => {
-    const saved = await saveRowPatch(row, true);
-    if (saved) loadTask();
+  /** Saves the persisted main record first, then every dirty child record. */
+  const saveAllChanges = async (showSuccess = true) => {
+    const mainChanged = mainDraftChanged || materialLinks !== (task?.materialLinks || "");
+    if (mainChanged && !(await saveMainTask(false, false))) return false;
+
+    const dirtyRows = (task?.imageTasks || []).filter((row: any) => Object.keys(editingRows[row.id] || {}).length > 0);
+    const failedRows: any[] = [];
+    for (const row of dirtyRows) {
+      if (!(await saveRowPatch(row, false, false))) failedRows.push(row);
+    }
+    if (failedRows.length) {
+      message.error(`以下图片需求保存失败：${failedRows.map((row) => `#${row.imageIndex} ${row.imageTitle || `图片 ${row.imageIndex}`}`).join("、")}。其余已成功保存，请修正后重试。`);
+      return false;
+    }
+    if (showSuccess && (mainChanged || dirtyRows.length)) message.success("法旨及图片需求已保存");
+    if (mainChanged || dirtyRows.length) await loadTask();
+    return true;
   };
 
   const isBatchAssignableImageTask = (row: any) => !!canDesignAssign && row.status === "PENDING_ASSIGNMENT" && !row.designerId;
@@ -590,8 +595,9 @@ export default function FazhiDetailPage() {
 
   const submitApproval = async () => {
     try {
-      // Submission validates persisted data, so save the editable main form first.
-      const saved = await saveMainTask(false, false);
+      // Submission validates persisted data. Persist both the main draft and
+      // all changed image requirements before entering the existing workflow.
+      const saved = await saveAllChanges(false);
       if (!saved) return;
       await taskApi.submit(id);
       message.success("已提交运营主管审批");
@@ -837,7 +843,7 @@ export default function FazhiDetailPage() {
         description="主单信息与当前状态会在保存或流程处理后同步更新。"
         extra={(
           <div className={styles.operationActions}>
-            {canEditDraft && <Button icon={<SaveOutlined />} onClick={() => saveMainTask()}>保存主单信息</Button>}
+            {canEditDraft && <Button icon={<SaveOutlined />} onClick={() => void saveAllChanges()}>保存</Button>}
             {canSubmitOps && <Button type="primary" icon={<SendOutlined />} onClick={submitApproval}>提交运营主管审批</Button>}
             {canWithdraw && <Button icon={<RollbackOutlined />} onClick={withdrawApproval}>撤回修改</Button>}
             {canOpsApprove && <Button type="primary" icon={<CheckOutlined />} onClick={approveTask}>审批通过</Button>}
@@ -856,7 +862,7 @@ export default function FazhiDetailPage() {
           </div>
         )}
       >
-        {canEditDraft && <Alert className={styles.infoAlert} type="info" showIcon message="填写后请先保存，再返回或提交。" />}
+        {canEditDraft && <Alert className={styles.infoAlert} type="info" showIcon message="点击“保存”会依次保存主单信息和所有已修改的图片需求；任一图片保存失败会明确提示，且不会显示整体成功。" />}
         <Descriptions className={styles.basicInfo} column={{ xs: 1, md: 4 }} size="small" bordered>
           <Descriptions.Item label="状态">{taskStatusLabels[task.workflowStatus] || task.workflowStatus}</Descriptions.Item>
           <Descriptions.Item label="店铺">
@@ -906,10 +912,7 @@ export default function FazhiDetailPage() {
               <Descriptions column={{ xs: 1, md: 3 }} size="small" bordered>
                 <Descriptions.Item label="兼容产品图链接" span={3}>
                   {canEditDraft ? (
-                    <Space.Compact style={{ width: "100%" }}>
-                      <Input.TextArea rows={5} placeholder="一行一个链接，可填写兼容产品图、产品参考图或相关图片链接" value={materialLinks} onChange={(event) => setMaterialLinks(event.target.value)} />
-                      <Button icon={<SaveOutlined />} onClick={saveTaskLinks}>保存链接</Button>
-                    </Space.Compact>
+                    <Input.TextArea rows={5} placeholder="一行一个链接，可填写兼容产品图、产品参考图或相关图片链接；填写后使用页面顶部“保存”。" value={materialLinks} onChange={(event) => setMaterialLinks(event.target.value)} />
                   ) : (task.materialLinks || "-")}
                 </Descriptions.Item>
               </Descriptions>
@@ -937,7 +940,6 @@ export default function FazhiDetailPage() {
               </Col>
               <Col>
                 <Space className={styles.workbenchActionBar}>
-                  {canEditDraft && <Button size="small" icon={<SaveOutlined />} onClick={() => saveImageTask(selectedImageTask)}>保存图片需求</Button>}
                   {designerProductionStage && selectedImageTask.status !== "IN_PROGRESS" && <Button size="small" type="primary" onClick={startSelectedImageTask}>开始制作</Button>}
                   {designerProductionStage && selectedImageTask.status === "IN_PROGRESS" && <Button size="small" type="primary" icon={<SendOutlined />} onClick={submitSelectedImageTask}>提交审核</Button>}
                   {designReviewWorkbenchStage && <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => reviewSelectedImageTask(true)}>审核通过</Button>}

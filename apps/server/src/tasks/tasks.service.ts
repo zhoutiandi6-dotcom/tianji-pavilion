@@ -91,7 +91,15 @@ export class TasksService {
     const where: any = { AND: conditions };
 
     const skip = (page - 1) * pageSize;
-    const listImageTasks: any = { select: { id: true, status: true, designerId: true } };
+    // Reuse the assignment relation; do not snapshot a designer name onto Task.
+    const listImageTasks: any = {
+      select: {
+        id: true,
+        status: true,
+        designerId: true,
+        designer: { select: { id: true, username: true, displayName: true } },
+      },
+    };
     if (userRole === "OPERATION") {
       listImageTasks.select.attachments = {
         where: { deletedAt: null, category: "IMAGE_COMPLETED" },

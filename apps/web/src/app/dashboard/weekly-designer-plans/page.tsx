@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Drawer, Empty, Input, Modal, Space, Statistic, Table, Tabs, Tag, Typography, message } from 'antd';
+import { Button, Card, Drawer, Empty, Input, Modal, Space, Statistic, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import { LeftOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { userApi, weeklyDesignerPlanApi } from '@/lib/api';
@@ -11,6 +11,15 @@ import { formatShanghaiDateTime, formatShanghaiWeek, getShanghaiWeekStart, shift
 import RoleGate from '@/components/RoleGate';
 
 const { Title, Text } = Typography;
+
+const workflowStatusLabels: Record<string, string> = {
+  OPS_APPROVED: '已通过待设计分配',
+  DESIGN_ASSIGNED: '已分配设计',
+  IN_DESIGN: '设计中',
+  DESIGN_REVIEW: '待设计审核',
+  DESIGN_APPROVED: '已完成',
+  COMPLETED: '已完成',
+};
 
 function readChangeMetadata(value?: string) {
   try { return value ? JSON.parse(value) : {}; } catch { return {}; }
@@ -147,9 +156,9 @@ function WeeklyDesignerPlansContent() {
         <Card bordered={false} title="计划法旨明细" style={{ marginTop: 16 }}>
           <Table rowKey="taskId" loading={loading} dataSource={overview?.decrees || []} pagination={{ pageSize: 10 }} columns={[
             { title: '法旨编号', dataIndex: 'serialNumber' }, { title: '店铺', dataIndex: 'storeName' }, { title: '产品编号', dataIndex: 'productCode' }, { title: '需求类型', dataIndex: 'requirementType' },
-            { title: '计划图片', dataIndex: 'plannedImageCount', render: (value) => `${value} 张` }, { title: '当前设计师', dataIndex: 'designerName' }, { title: '当前状态', dataIndex: 'workflowStatus' },
+            { title: '计划图片', dataIndex: 'plannedImageCount', render: (value) => `${value} 张` }, { title: '当前设计师', dataIndex: 'designerName' }, { title: '当前状态', render: (_value, row: any) => row.businessStatusLabel || workflowStatusLabels[row.workflowStatus] || row.workflowStatus || '-' },
             { title: '加入时间', dataIndex: 'plannedAt', render: (value) => formatShanghaiDateTime(value) || '-' },
-            { title: '操作', render: (_value: unknown, row: any) => row.isAssignmentAnomaly ? <Text type="danger">负责人异常</Text> : row.isCompleted ? <Text type="secondary">已完成只读</Text> : canConfigure ? <Space size={4}><Button size="small" onClick={() => startAssignment([row.taskId], 'REASSIGN')}>调整分配</Button><Button size="small" onClick={() => setRemoveTarget(row)}>移出计划</Button></Space> : <Text type="secondary">只读</Text> },
+            { title: '操作', render: (_value: unknown, row: any) => row.isAssignmentAnomaly ? <Text type="danger">负责人异常</Text> : row.isCompleted ? <Text type="secondary">已完成只读</Text> : canConfigure ? <Space size={4}><Tooltip title={row.isReassignable ? '' : (row.reassignDisabledReason || '当前状态不允许调整分配')}><span><Button size="small" disabled={!row.isReassignable} onClick={() => startAssignment([row.taskId], 'REASSIGN')}>调整分配</Button></span></Tooltip><Button size="small" onClick={() => setRemoveTarget(row)}>移出计划</Button></Space> : <Text type="secondary">只读</Text> },
           ]} locale={{ emptyText: <Empty description="尚未添加法旨到本周计划" /> }} />
         </Card>
       </> },

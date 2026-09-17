@@ -76,6 +76,17 @@ describe("WeeklyDesignerPlansService", () => {
     expect(prisma.weeklyDesignerPlan.findMany).not.toHaveBeenCalled();
   });
 
+  it("exposes reassignment eligibility from the persisted decree and image-task states", async () => {
+    prisma.weeklyPlan.findUnique.mockResolvedValue({ id: 1, status: "ACTIVE", items: [planItem({ imageTask: { ...planItem().imageTask, task: { ...planItem().imageTask.task, workflowStatus: "IN_DESIGN" } } })] });
+
+    const eligible = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
+    expect(eligible.decrees[0]).toEqual(expect.objectContaining({ isReassignable: true, reassignDisabledReason: null, businessStatusLabel: "已分配待开始" }));
+
+    prisma.weeklyPlan.findUnique.mockResolvedValue({ id: 1, status: "ACTIVE", items: [planItem({ imageTask: { ...planItem().imageTask, status: "IN_PROGRESS", task: { ...planItem().imageTask.task, workflowStatus: "IN_DESIGN" } } })] });
+    const ineligible = await service.getWeekOverview(9, "DESIGN_MANAGER", currentWeekStart());
+    expect(ineligible.decrees[0]).toEqual(expect.objectContaining({ isReassignable: false, businessStatusLabel: "设计中", reassignDisabledReason: "图片任务已开始或进入后续阶段，不能调整分配" }));
+  });
+
   it("initializes only a DRAFT weekly plan without creating legacy numeric targets", async () => {
     const result = await service.initializeWeek(currentWeekStart(), 9, "DESIGN_MANAGER");
 

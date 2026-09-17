@@ -18,6 +18,35 @@
   margin: -4px 0 16px;
 }
 
+.coreInfoGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.coreInfoItem {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid #dfe5ed;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.coreInfoItem span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.coreInfoItem strong {
+  overflow: hidden;
+  color: #1d2939;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .designerActionPanel {
   display: flex;
   align-items: center;
@@ -332,6 +361,7 @@
 }
 
 @media (max-width: 900px) {
+  .coreInfoGrid,
   .requirementGrid,
   .materialColumns {
     grid-template-columns: 1fr;
@@ -339,6 +369,10 @@
 }
 
 @media (max-width: 640px) {
+  .coreInfoItem strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .designerActionPanel,
   .reviewActionPanel {
     align-items: flex-start;

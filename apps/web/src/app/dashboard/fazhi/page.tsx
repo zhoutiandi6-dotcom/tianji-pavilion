@@ -85,6 +85,7 @@ export default function FazhiListPage() {
   const [assignment, setAssignment] = useState<{ taskIds: number[]; mode: "ASSIGN" | "REASSIGN" } | null>(null);
   const [review, setReview] = useState<{ taskIds: number[]; action: "APPROVE" | "REJECT"; imageTaskId?: number } | null>(null);
   const [reviewRemark, setReviewRemark] = useState("");
+  const [highlightedId, setHighlightedId] = useState<number | null>(null);
 
   const role = currentUser?.role || "";
   const isAdmin = ["OWNER", "SUPER_ADMIN"].includes(role);
@@ -94,6 +95,7 @@ export default function FazhiListPage() {
   const isArchivedScope = filters.scope === "archived";
   const isOpsApprovalScope = filters.scope === "ops-approvals";
   const isSupervisorScope = SUPERVISOR_SCOPES.includes(filters.scope);
+  const showAssignedDesigner = (role === "DESIGN_MANAGER" || isAdmin) && filters.scope === "design-tasks";
   const canExport = ["OPERATION_MANAGER", "DESIGN_MANAGER"].includes(role) || isAdmin;
   const canBatchPriorityRole = ["OPERATION", "OPERATION_MANAGER", "DESIGN_MANAGER"].includes(role) || isAdmin;
 
@@ -315,6 +317,35 @@ export default function FazhiListPage() {
     applyFilters(next);
   };
 
+  const openDetail = (row: any) => {
+    const returnTo = typeof window === "undefined"
+      ? "/dashboard/fazhi"
+      : `${window.location.pathname}${window.location.search}`;
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(`tianji:fazhi-list:${returnTo}`, JSON.stringify({ scrollTop: window.scrollY, focusId: row.id }));
+    }
+    router.push(`/dashboard/fazhi/${row.id}?returnTo=${encodeURIComponent(returnTo)}&returnFocus=${row.id}`, { scroll: false });
+  };
+
+  useEffect(() => {
+    const focusId = Number(searchParams.get("returnFocus"));
+    const contextKey = `tianji:fazhi-list:${typeof window === "undefined" ? "/dashboard/fazhi" : `${window.location.pathname}${window.location.search}`}`;
+    let context: { scrollTop?: number; focusId?: number } | null = null;
+    try { context = JSON.parse(sessionStorage.getItem(contextKey) || "null"); } catch { context = null; }
+    const targetId = focusId || context?.focusId;
+    if (loading || !targetId || !(data.items || []).some((row: any) => row.id === targetId)) return;
+    setHighlightedId(targetId);
+    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: context?.scrollTop || 0, behavior: "auto" }));
+    const timer = window.setTimeout(() => {
+      setHighlightedId(null);
+      sessionStorage.removeItem(contextKey);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("returnFocus");
+      router.replace(params.toString() ? `/dashboard/fazhi?${params}` : "/dashboard/fazhi", { scroll: false });
+    }, 2600);
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [data.items, loading, router, searchParams]);
+
   const exportCsv = async () => {
     try {
       const pageSize = 100;
@@ -401,7 +432,7 @@ export default function FazhiListPage() {
               <span>{row.requester}</span><span>{row.productCode}</span><span>{row.effectiveImageCount} 张</span>
               <div><Tag color={row.submissionType === "RESUBMIT" ? "orange" : "blue"}>{row.submissionType === "RESUBMIT" ? "退回后重提" : "首次提交"}</Tag><Text type="secondary" style={{ display: "block", fontSize: 12 }}>{row.latestSubmittedAt ? new Date(row.latestSubmittedAt).toLocaleString("zh-CN") : "-"}</Text></div>
               <div>{row.isOverdue ? <Tag color="red">等待 {row.waitingHours} 小时</Tag> : <Text>等待 {row.waitingHours} 小时</Text>}{row.dataIssues?.length > 0 && <Text type="danger" style={{ display: "block", fontSize: 12 }}>资料异常 {row.dataIssues.length} 项</Text>}</div>
-              <Space style={{ justifyContent: "flex-end" }}><Button size="small" icon={<EyeOutlined />} onClick={() => router.push(`/dashboard/fazhi/${row.id}`)}>去审批</Button></Space>
+              <Space style={{ justifyContent: "flex-end" }}><Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(row)}>去审批</Button></Space>
             </div>)}
           </div>}
           <div style={{ marginTop: 16, textAlign: "right" }}><Pagination current={filters.page} pageSize={filters.pageSize} total={data.total} showSizeChanger onChange={(page, pageSize) => applyFilters({ ...filters, page, pageSize })} /></div>
@@ -509,7 +540,7 @@ export default function FazhiListPage() {
                 display: "grid",
                 gridTemplateColumns: (canBatchPriorityRole ? "40px " : "") + (isDraftScope
                   ? "minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr) minmax(120px, 0.6fr)"
-                  : "minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr) minmax(120px, 0.7fr) minmax(120px, 0.6fr)"),
+                  : `minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr)${showAssignedDesigner ? " minmax(120px, 0.7fr)" : ""} minmax(120px, 0.7fr) minmax(120px, 0.6fr)`),
                 alignItems: "center",
                 gap: 12,
                 padding: "0 4px 8px",
@@ -523,6 +554,7 @@ export default function FazhiListPage() {
               <span>{"\u9700\u6c42\u4eba"}</span>
               <span>{"\u72b6\u6001"}</span>
               <span>{"\u4f18\u5148\u7ea7"}</span>
+              {showAssignedDesigner && <span>当前设计师</span>}
               {!isDraftScope && <span>{"\u5ba1\u6279"}</span>}
               <span style={{ textAlign: "right" }}>{"\u64cd\u4f5c"}</span>
             </div>
@@ -539,7 +571,7 @@ export default function FazhiListPage() {
                   ? { label: "改派", onClick: () => setAssignment({ taskIds: [row.id], mode: "REASSIGN" }), type: "default" as const }
                   : canReviewDesign(row)
                     ? { label: "审核", onClick: () => openSingleImageReview(row, "APPROVE"), type: "primary" as const }
-                    : { label: isDraftScope ? "继续编辑" : archived ? "查看归档" : "查看详情", onClick: () => router.push("/dashboard/fazhi/" + row.id), type: "default" as const };
+                    : { label: isDraftScope ? "继续编辑" : archived ? "查看归档" : "查看详情", onClick: () => openDetail(row), type: "default" as const };
               return (
                 <div
                   key={row.id}
@@ -547,12 +579,15 @@ export default function FazhiListPage() {
                     display: "grid",
                     gridTemplateColumns: (canBatchPriorityRole ? "40px " : "") + (isDraftScope
                       ? "minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr) minmax(120px, 0.6fr)"
-                      : "minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr) minmax(120px, 0.7fr) minmax(120px, 0.6fr)"),
+                      : `minmax(280px, 1.4fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr) minmax(90px, 0.5fr)${showAssignedDesigner ? " minmax(120px, 0.7fr)" : ""} minmax(120px, 0.7fr) minmax(120px, 0.6fr)`),
                     alignItems: "center",
                     gap: 12,
                     padding: "9px 4px",
                     borderBottom: "1px solid #f0f0f0",
                     minHeight: 56,
+                    background: highlightedId === row.id ? "#fff7d6" : undefined,
+                    boxShadow: highlightedId === row.id ? "inset 3px 0 0 #d89614" : undefined,
+                    transition: "background 240ms ease, box-shadow 240ms ease",
                   }}
                 >
                   {canBatchPriorityRole && (
@@ -579,6 +614,7 @@ export default function FazhiListPage() {
                   <Text style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayRequester(row)}</Text>
                   <SecondaryStatusTag status={row.workflowStatus} label={isDraftScope ? "未提交" : (statusLabels[row.workflowStatus] || row.workflowStatus)} />
                   <Tag color={row.priority === "URGENT" ? "red" : "default"} style={{ width: "fit-content", marginInlineEnd: 0 }}>{row.priority === "URGENT" ? "\u52a0\u6025" : "\u666e\u901a"}</Tag>
+                  {showAssignedDesigner && <Text style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayUserName((row.imageTasks || []).find((item: any) => item.designer)?.designer, "未分配")}</Text>}
                   {!isDraftScope && (!archived && canApprove ? (
                     <Popconfirm title="确定通过该法旨审批吗？" onConfirm={() => approveTask(row)}>
                       <Button size="small" shape="round" type="primary" style={{ width: 78 }}>{"\u672a\u5ba1\u6279"}</Button>
@@ -609,7 +645,7 @@ export default function FazhiListPage() {
                           if (key === "delete") {
                             Modal.confirm({ title: "确认删除该法旨？", content: "删除后不可恢复。", okButtonProps: { danger: true }, onOk: () => deleteTask(row) });
                           }
-                          if (key === "view") router.push("/dashboard/fazhi/" + row.id);
+                          if (key === "view") openDetail(row);
                         },
                       }}
                     >

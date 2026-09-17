@@ -1,12 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Descriptions, Input, Modal, Select, Space, Tag, Typography, message } from "antd";
 import api, { getErrorMessage, imageTaskApi } from "@/lib/api";
 import { displayUserName } from "@/lib/display";
 import { formatShanghaiWeek, getShanghaiWeekStart, shiftShanghaiWeekStart } from "@/lib/shanghai-week";
 
 const { Text } = Typography;
+
+const workflowStatusLabels: Record<string, string> = {
+  OPS_APPROVED: "已通过待设计分配",
+  DESIGN_ASSIGNED: "已分配设计",
+  IN_DESIGN: "设计中",
+  DESIGN_REVIEW: "待设计审核",
+  DESIGN_APPROVED: "已完成",
+  COMPLETED: "已完成",
+};
 
 export default function TaskAssignmentModal({
   open,
@@ -34,6 +43,7 @@ export default function TaskAssignmentModal({
   const [submitting, setSubmitting] = useState(false);
   const [currentLoad, setCurrentLoad] = useState<number | null>(null);
   const [reason, setReason] = useState("");
+  const submitInFlightRef = useRef(false);
   const selectedTasks = tasks.filter((item) => taskIds.includes(item.id));
   const imageCount = selectedTasks.reduce((sum, item) => sum + Number(item.imageCount || item.imageTasks?.filter((image: any) => !image.deletedAt).length || 0), 0);
 
@@ -56,9 +66,13 @@ export default function TaskAssignmentModal({
 
   const submit = async () => {
     if (!designerId) return message.warning("请选择目标设计师");
+    if (mode === "REASSIGN" && !reason.trim()) return message.warning("请填写调整原因");
+    // React state is asynchronous; this synchronous lock makes a fast double
+    // click produce at most one mutation request and one resulting toast.
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setSubmitting(true);
     try {
-      if (mode === "REASSIGN" && !reason.trim()) return message.warning("请填写调整原因");
       await imageTaskApi.batchAssignTasks({ taskIds, designerId, mode, weekStart: selectedWeek, reason: reason.trim() || undefined });
       message.success(mode === "ASSIGN" ? "法旨已分配并纳入周计划" : "法旨已改派并同步周计划");
       onClose();
@@ -66,15 +80,25 @@ export default function TaskAssignmentModal({
     } catch (error) {
       message.error(getErrorMessage(error, "分配法旨失败"));
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
     }
   };
 
-  return <Modal title={mode === "REASSIGN" ? "调整法旨分配" : planMode ? "添加法旨到本周计划" : "分配法旨"} open={open} onCancel={onClose} onOk={submit} okText={mode === "REASSIGN" ? "确认调整" : "确认分配"} confirmLoading={submitting} destroyOnClose>
+  const businessStatuses = [...new Set(selectedTasks.map((item) => item.businessStatusLabel).filter(Boolean))];
+  const workflowStatuses = [...new Set(selectedTasks.map((item) => item.workflowStatus).filter(Boolean))];
+  const currentStatus = businessStatuses.length === 1
+    ? businessStatuses[0]
+    : businessStatuses.length ? "状态不一致"
+      : workflowStatuses.length === 1 ? (workflowStatusLabels[workflowStatuses[0]] || workflowStatuses[0])
+        : workflowStatuses.length ? "状态不一致" : "暂未获取";
+
+  return <Modal title={mode === "REASSIGN" ? "调整法旨分配" : planMode ? "添加法旨到本周计划" : "分配法旨"} open={open} onCancel={onClose} onOk={submit} okText={mode === "REASSIGN" ? "确认调整" : "确认分配"} confirmLoading={submitting} okButtonProps={{ disabled: submitting }} cancelButtonProps={{ disabled: submitting }} maskClosable={!submitting} closable={!submitting} destroyOnClose>
     <Descriptions size="small" column={1} style={{ marginBottom: 16 }}>
       <Descriptions.Item label="已选择法旨">{taskIds.length} 道</Descriptions.Item>
       <Descriptions.Item label="有效图片">{imageCount} 张</Descriptions.Item>
-      <Descriptions.Item label="当前状态"><Tag color={mode === "ASSIGN" ? "blue" : "orange"}>{mode === "ASSIGN" ? "待分配" : "已分配待开始"}</Tag></Descriptions.Item>
+      <Descriptions.Item label="当前状态"><Tag color={mode === "ASSIGN" ? "blue" : "orange"}>{mode === "ASSIGN" ? "待分配" : currentStatus}</Tag></Descriptions.Item>
+      {mode === "REASSIGN" && <Descriptions.Item label="图片任务">均为已分配、未开始</Descriptions.Item>}
     </Descriptions>
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       <div><Text strong>目标设计师</Text><Select value={designerId} onChange={setDesignerId} placeholder="选择设计师" style={{ width: "100%", marginTop: 6 }} options={designers.map((user) => ({ value: user.userId ?? user.id, label: `${user.name || displayUserName(user)}（${user.username}）` }))} /></div>
