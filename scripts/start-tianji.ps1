@@ -34,8 +34,7 @@ function Start-Or-ReuseTianjiService {
   if(-not(Wait-TianjiEndpoint -Url $url -TimeoutSeconds $timeout)){throw "Tianji $Service failed health check from release $root."}
 }
 
-$mutex=Get-TianjiMutex -Name 'launcher'
-if(-not(Enter-TianjiMutex -Mutex $mutex)){throw 'Another Tianji start or stop operation is already running.'}
+$mutex=$null
 $oldDataRoot=$env:TIANJI_DATA_ROOT
 $oldJwtSecret=$env:JWT_SECRET
 $oldAllowedOrigins=$env:ALLOWED_ORIGINS
@@ -45,6 +44,8 @@ try {
   if($AllowedOrigins){$env:ALLOWED_ORIGINS=$AllowedOrigins}
   Assert-TianjiReleaseArtifacts
   $dataConfig=Get-TianjiDataConfiguration -Root $root
+  $mutex=Get-TianjiMutex -Name 'launcher' -Scope $dataConfig.DataRoot
+  if(-not(Enter-TianjiMutex -Mutex $mutex)){throw 'Another Tianji start or stop operation is already running.'}
   Initialize-TianjiRuntime
   $state=Read-TianjiState -Root $root
   if(-not $state -or $state.projectRoot -ne $root){$state=New-TianjiState -Root $root}
@@ -60,4 +61,4 @@ try {
   }
   Write-Host "TIANJI_STARTED root=$root frontend=$FrontendPort backend=$BackendPort"
   if(-not $NoBrowser){Start-Process "http://127.0.0.1:$FrontendPort/login"}
-} finally { $env:TIANJI_DATA_ROOT=$oldDataRoot;$env:JWT_SECRET=$oldJwtSecret;$env:ALLOWED_ORIGINS=$oldAllowedOrigins;Exit-TianjiMutex -Mutex $mutex }
+} finally { $env:TIANJI_DATA_ROOT=$oldDataRoot;$env:JWT_SECRET=$oldJwtSecret;$env:ALLOWED_ORIGINS=$oldAllowedOrigins;if($mutex){Exit-TianjiMutex -Mutex $mutex} }

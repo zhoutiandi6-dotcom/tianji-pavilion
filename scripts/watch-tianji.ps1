@@ -14,7 +14,8 @@ $maxRestarts = 3
 $restartWindow = [TimeSpan]::FromMinutes(10)
 $failureCounts = @{ frontend = 0; backend = 0 }
 $restartHistory = @{ frontend = @(); backend = @() }
-$mutex = Get-TianjiMutex -Name ("watchdog." + ($Root -replace '[^A-Za-z0-9]', '_'))
+$dataConfig = Get-TianjiDataConfiguration -Root $Root
+$mutex = Get-TianjiMutex -Name 'watchdog' -Scope $dataConfig.DataRoot
 
 function Get-WatchdogServiceUrl([string]$Service) {
   if ($Service -eq "frontend") { return "http://127.0.0.1:$FrontendPort/login" }
@@ -35,7 +36,7 @@ function Restart-WatchedService {
   $record = $State.$Service
   $oldPid = if ($record) { $record.pid } else { "none" }
   if (Test-TianjiRecordedProcess -Record $record) {
-    Stop-TianjiRecordedProcess -Record $record -Label $Service -Root $Root | Out-Null
+    Stop-TianjiRecordedProcess -Record $record -Label $Service -Root $Root -DataConfiguration $dataConfig | Out-Null
   }
 
   $port = if ($Service -eq "frontend") { $FrontendPort } else { $BackendPort }
@@ -80,7 +81,14 @@ try {
   $initialState.watchdog = [pscustomobject]@{
     pid = $watchdogSnapshot.Pid
     startedAt = $watchdogSnapshot.StartedAt
+    processStartTime = $watchdogSnapshot.StartedAt
     processName = $watchdogSnapshot.Name
+    service = 'watchdog'
+    dataRoot = $dataConfig.DataRoot
+    projectRoot = $Root
+    release = (Split-Path $Root -Leaf)
+    commandLine = $watchdogSnapshot.CommandLine
+    workingDirectory = $PSScriptRoot
   }
   $initialState.watchdogStatus = "running"
   Write-TianjiLifecycleEvent -Root $Root -Event ([pscustomobject]@{

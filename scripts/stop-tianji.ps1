@@ -4,7 +4,8 @@ $ErrorActionPreference = "Continue"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Import-Module (Join-Path $PSScriptRoot "tianji-runtime.psm1") -Force -DisableNameChecking
 
-$mutex = Get-TianjiMutex -Name "launcher"
+$dataConfig = Get-TianjiDataConfiguration -Root $root
+$mutex = Get-TianjiMutex -Name "launcher" -Scope $dataConfig.DataRoot
 if (-not (Enter-TianjiMutex -Mutex $mutex)) {
   Write-Host "A Tianji start or stop operation is already running." -ForegroundColor Yellow
   exit 1
@@ -19,7 +20,7 @@ try {
 
   foreach ($entry in @(@("watchdog", $state.watchdog), @("frontend", $state.frontend), @("backend", $state.backend))) {
     $name, $record = $entry
-    if (Stop-TianjiRecordedProcess -Record $record -Label $name -Root $root) {
+    if (Stop-TianjiRecordedProcess -Record $record -Label $name -Root $root -DataConfiguration $dataConfig) {
       Write-Host "Stopped Tianji $name process PID $($record.pid)."
     } elseif ($record) {
       Write-Host "Skipped stale or non-owned $name PID $($record.pid)." -ForegroundColor Yellow
