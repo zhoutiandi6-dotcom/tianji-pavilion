@@ -13,8 +13,11 @@ function Assert-TianjiMigrationBytes {
   )
   $sourceMigrations = Join-Path $SourcePrismaRoot 'migrations'
   $artifactMigrations = Join-Path $ArtifactPrismaRoot 'migrations'
+  $migrationRoot = $sourceMigrations.TrimEnd('\\', '/')
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
-    $relative = [System.IO.Path]::GetRelativePath($sourceMigrations, $sourceFile.FullName)
+    # Path.GetRelativePath is unavailable in Windows PowerShell 5.1. Keep
+    # the byte-for-byte migration verification compatible with the launcher.
+    $relative = $sourceFile.FullName.Substring($migrationRoot.Length).TrimStart('\\', '/')
     $artifactFile = Join-Path $artifactMigrations $relative
     if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
     $sourceHash = Get-TianjiSha256 $sourceFile.FullName
