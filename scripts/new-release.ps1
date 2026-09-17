@@ -14,7 +14,7 @@ function Assert-TianjiMigrationBytes {
   $sourceMigrations = Join-Path $SourcePrismaRoot 'migrations'
   $artifactMigrations = Join-Path $ArtifactPrismaRoot 'migrations'
   $pathSeparators = [char[]]@([char]92, [char]47)
-  $migrationRoot = $sourceMigrations.TrimEnd($pathSeparators)
+  $migrationRoot = (Resolve-Path -LiteralPath $sourceMigrations).Path.TrimEnd($pathSeparators)
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
     # Path.GetRelativePath is unavailable in Windows PowerShell 5.1. Keep
     # the byte-for-byte migration verification compatible with the launcher.
