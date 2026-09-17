@@ -11,15 +11,16 @@ function Assert-TianjiMigrationBytes {
     [Parameter(Mandatory=$true)][string]$SourcePrismaRoot,
     [Parameter(Mandatory=$true)][string]$ArtifactPrismaRoot
   )
-  $sourceMigrations = (Resolve-Path -LiteralPath (Join-Path $SourcePrismaRoot 'migrations')).Path.TrimEnd([char]92, [char]47)
-  $artifactMigrations = (Resolve-Path -LiteralPath (Join-Path $ArtifactPrismaRoot 'migrations')).Path.TrimEnd([char]92, [char]47)
-  $sourcePrefix = $sourceMigrations + [IO.Path]::DirectorySeparatorChar
+  $sourceMigrations = (Resolve-Path -LiteralPath (Join-Path $SourcePrismaRoot 'migrations')).Path
+  $artifactMigrations = (Resolve-Path -LiteralPath (Join-Path $ArtifactPrismaRoot 'migrations')).Path
+  if ($sourceMigrations.EndsWith('\\')) { $sourceMigrations = $sourceMigrations.Substring(0, $sourceMigrations.Length - 1) }
+  if ($artifactMigrations.EndsWith('\\')) { $artifactMigrations = $artifactMigrations.Substring(0, $artifactMigrations.Length - 1) }
   foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceMigrations -Recurse -File -Filter 'migration.sql') {
     # Path.GetRelativePath is unavailable in Windows PowerShell 5.1. Keep
     # the byte-for-byte migration verification compatible with the launcher.
     $sourceFullPath = (Resolve-Path -LiteralPath $sourceFile.FullName).Path
-    if (-not $sourceFullPath.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Migration source escapes root: $sourceFullPath" }
-    $relative = $sourceFullPath.Substring($sourcePrefix.Length)
+    if ($sourceFullPath.Length -le $sourceMigrations.Length -or $sourceFullPath.Substring(0, $sourceMigrations.Length) -ine $sourceMigrations -or $sourceFullPath[$sourceMigrations.Length] -ne [IO.Path]::DirectorySeparatorChar) { throw "Migration source escapes root: root=$sourceMigrations source=$sourceFullPath" }
+    $relative = $sourceFullPath.Substring($sourceMigrations.Length + 1)
     $artifactFile = Join-Path $artifactMigrations $relative
     Write-Host "migration-check source=$sourceFullPath relative=$relative artifact=$artifactFile sourceExists=$(Test-Path -LiteralPath $sourceFullPath) artifactExists=$(Test-Path -LiteralPath $artifactFile)"
     if (-not (Test-Path -LiteralPath $artifactFile)) { throw "Artifact migration is missing: $relative" }
