@@ -15,7 +15,15 @@ function Get-TianjiTreeStats {
   [pscustomobject]@{ FileCount=$files.Count; Bytes=[int64](($files | Measure-Object Length -Sum).Sum) }
 }
 
-function Get-TianjiSha256 { param([Parameter(Mandatory=$true)][string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-TianjiSha256 {
+  param([Parameter(Mandatory=$true)][string]$Path)
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '') }
+    finally { $sha256.Dispose() }
+  } finally { $stream.Dispose() }
+}
 
 function Assert-TianjiNoReparsePoint {
   param([Parameter(Mandatory=$true)][string]$Path)
