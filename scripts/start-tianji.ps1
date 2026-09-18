@@ -48,7 +48,7 @@ try {
   if(-not(Enter-TianjiMutex -Mutex $mutex)){throw 'Another Tianji start or stop operation is already running.'}
   Initialize-TianjiRuntime
   $state=Read-TianjiState -Root $root
-  if(-not $state -or $state.projectRoot -ne $root){$state=New-TianjiState -Root $root}
+  if(-not $state -or $state.projectRoot -ne $root -or -not $state.PSObject.Properties['release']){$state=New-TianjiState -Root $root}
   $state.frontendPort=$FrontendPort;$state.backendPort=$BackendPort;$state.logDirectory=Get-TianjiRuntimeDirectory
   Assert-TianjiPortAvailable -Port $BackendPort -OwnedRecord $state.backend
   Assert-TianjiPortAvailable -Port $FrontendPort -OwnedRecord $state.frontend

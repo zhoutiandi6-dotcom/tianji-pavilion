@@ -136,10 +136,13 @@ function Exit-TianjiMutex {
 
 function New-TianjiState {
   param([Parameter(Mandatory = $true)][string]$Root)
+  $dataConfig = Get-TianjiDataConfiguration -Root $Root
   return [ordered]@{
     schemaVersion = 3
     launchId = [Guid]::NewGuid().ToString()
+    release = (Split-Path $Root -Leaf)
     projectRoot = $Root
+    dataRoot = $dataConfig.DataRoot
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
     updatedAt = $null
     lanIp = $null
@@ -315,6 +318,13 @@ function Read-TianjiState {
 
 function Write-TianjiState {
   param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Root)
+  $expectedRelease = Split-Path $Root -Leaf
+  $dataConfig = Get-TianjiDataConfiguration -Root $Root
+  if ($State.release -ne $expectedRelease -or $State.dataRoot -ne $dataConfig.DataRoot) { throw 'Runtime-state top-level release or dataRoot is inconsistent.' }
+  foreach ($service in @('watchdog','frontend','backend')) {
+    $record = $State.$service
+    if ($record -and ($record.release -ne $expectedRelease -or $record.dataRoot -ne $dataConfig.DataRoot -or $record.projectRoot -ne $Root)) { throw "Runtime-state $service fingerprint is inconsistent." }
+  }
   Initialize-TianjiRuntime
   Normalize-TianjiStateTimestamps -State $State
   $updatedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -506,12 +516,14 @@ function Stop-TianjiRecordedProcess {
   param($Record, [string]$Label, [string]$Root, [Parameter(Mandatory=$true)]$DataConfiguration)
   $auditPath = Join-Path $DataConfiguration.LogsPath 'stop-audit.jsonl'
   function Write-StopAudit($result,$reason,$attempt,$exited,$released) {
-    [ordered]@{timestamp=(Get-Date).ToUniversalTime().ToString('o');environment=$DataConfiguration.DataRoot;dataRoot=$DataConfiguration.DataRoot;release=(Split-Path $Root -Leaf);role=$Label;pid=if($Record){$Record.pid}else{$null};processStartTime=if($Record){$Record.processStartTime}else{$null};port=if($Record){$Record.port}else{$null};ownershipValidation=$result;reason=$reason;stopAttempt=$attempt;exited=$exited;portReleased=$released}|ConvertTo-Json -Compress|Add-Content -LiteralPath $auditPath -Encoding utf8
+    $recordPort = if($Record -and $Record.PSObject.Properties['port']){$Record.PSObject.Properties['port'].Value}else{$null}
+    [ordered]@{timestamp=(Get-Date).ToUniversalTime().ToString('o');environment=$DataConfiguration.DataRoot;dataRoot=$DataConfiguration.DataRoot;release=(Split-Path $Root -Leaf);role=$Label;pid=if($Record){$Record.pid}else{$null};processStartTime=if($Record){$Record.processStartTime}else{$null};port=$recordPort;ownershipValidation=$result;reason=$reason;stopAttempt=$attempt;exited=$exited;portReleased=$released}|ConvertTo-Json -Compress|Add-Content -LiteralPath $auditPath -Encoding utf8
   }
   if (-not $Record) { Write-StopAudit 'FAIL' 'missing-record' $false $false $false; return $false }
   $snapshot=Get-TianjiProcessSnapshot -Pid ([int]$Record.pid)
   $expectedStart=if($Record.processStartTime){[string]$Record.processStartTime}else{[string]$Record.startedAt}
-  $ownershipOk=$snapshot -and $snapshot.StartedAt -eq $expectedStart -and $snapshot.Name -eq $Record.processName -and $Record.port -and (Get-TianjiPortOccupant -Port ([int]$Record.port)).Pid -eq [int]$Record.pid -and $Record.dataRoot -eq $DataConfiguration.DataRoot -and $Record.projectRoot -eq $Root -and $snapshot.CommandLine -eq $Record.commandLine
+  $portProperty=$Record.PSObject.Properties['port'];$portOk=if($portProperty -and $portProperty.Value){$occupant=Get-TianjiPortOccupant -Port ([int]$portProperty.Value);$occupant -and $occupant.Pid -eq [int]$Record.pid}else{$true}
+  $ownershipOk=$snapshot -and $snapshot.StartedAt -eq $expectedStart -and $snapshot.Name -eq $Record.processName -and $portOk -and $Record.dataRoot -eq $DataConfiguration.DataRoot -and $Record.projectRoot -eq $Root -and $snapshot.CommandLine -eq $Record.commandLine
   if(-not $ownershipOk){Write-StopAudit 'FAIL' 'PROCESS_OWNERSHIP_MISMATCH' $false $false $false;Write-Host 'STOP_BLOCKED PROCESS_OWNERSHIP_MISMATCH';return $false}
   Write-StopAudit 'PASS' 'validated' $true $false $false
   $portProperty = $Record.PSObject.Properties["port"]
@@ -526,7 +538,7 @@ function Stop-TianjiRecordedProcess {
   if (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
     Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
   }
-  $exited=-not [bool](Get-Process -Id $pid -ErrorAction SilentlyContinue);$released=-not [bool](Get-TianjiPortOccupant -Port ([int]$Record.port))
+  $exited=-not [bool](Get-Process -Id $pid -ErrorAction SilentlyContinue);$released=if($portProperty -and $portProperty.Value){-not [bool](Get-TianjiPortOccupant -Port ([int]$portProperty.Value))}else{$true}
   $stopResult=if($exited -and $released){'PASS'}else{'FAIL'}
   Write-StopAudit $stopResult 'stop-complete' $true $exited $released
   if ($Root -and $Record.PSObject.Properties["service"] -and $Record.service) {
