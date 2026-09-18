@@ -184,6 +184,21 @@ function Set-TianjiTimestampProperty {
 function Normalize-TianjiServiceRecordTimestamps {
   param($Record)
   Set-TianjiTimestampProperty -Object $Record -Name "startedAt"
+  Set-TianjiTimestampProperty -Object $Record -Name "processStartTime"
+}
+
+function ConvertTo-TianjiUtcTicks {
+  param($Value)
+  if ($null -eq $Value) { return $null }
+  try {
+    if ($Value -is [datetimeoffset]) { return $Value.UtcDateTime.Ticks }
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime().Ticks }
+    $parsed = [datetimeoffset]::MinValue
+    if ([datetimeoffset]::TryParse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+      return $parsed.UtcDateTime.Ticks
+    }
+  } catch { }
+  return $null
 }
 
 function Normalize-TianjiStateTimestamps {
@@ -521,9 +536,10 @@ function Stop-TianjiRecordedProcess {
   }
   if (-not $Record) { Write-StopAudit 'FAIL' 'missing-record' $false $false $false; return $false }
   $snapshot=Get-TianjiProcessSnapshot -Pid ([int]$Record.pid)
-  $expectedStart=if($Record.processStartTime){[string]$Record.processStartTime}else{[string]$Record.startedAt}
+  $expectedStart=ConvertTo-TianjiUtcTicks $(if($Record.processStartTime){$Record.processStartTime}else{$Record.startedAt})
+  $actualStart=if($snapshot){ConvertTo-TianjiUtcTicks $snapshot.StartedAt}else{$null}
   $portProperty=$Record.PSObject.Properties['port'];$portOk=if($portProperty -and $portProperty.Value){$occupant=Get-TianjiPortOccupant -Port ([int]$portProperty.Value);$occupant -and $occupant.Pid -eq [int]$Record.pid}else{$true}
-  $ownershipOk=$snapshot -and $snapshot.StartedAt -eq $expectedStart -and $snapshot.Name -eq $Record.processName -and $portOk -and $Record.dataRoot -eq $DataConfiguration.DataRoot -and $Record.projectRoot -eq $Root -and $snapshot.CommandLine -eq $Record.commandLine
+  $ownershipOk=$snapshot -and $expectedStart -ne $null -and $actualStart -ne $null -and $actualStart -eq $expectedStart -and $snapshot.Name -eq $Record.processName -and $portOk -and $Record.dataRoot -eq $DataConfiguration.DataRoot -and $Record.projectRoot -eq $Root -and $snapshot.CommandLine -eq $Record.commandLine
   if(-not $ownershipOk){Write-StopAudit 'FAIL' 'PROCESS_OWNERSHIP_MISMATCH' $false $false $false;Write-Host 'STOP_BLOCKED PROCESS_OWNERSHIP_MISMATCH';return $false}
   Write-StopAudit 'PASS' 'validated' $true $false $false
   $portProperty = $Record.PSObject.Properties["port"]
