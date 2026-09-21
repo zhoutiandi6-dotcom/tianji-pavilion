@@ -35,13 +35,26 @@ describe("AttachmentsService completed attachment lifecycle", () => {
       attachment: {
         create: jest.fn().mockResolvedValue({ id: 22, fileName: "completed.png" }),
         findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),
       },
+      pilotFeedback: { findUnique: jest.fn().mockResolvedValue({ id: 7, userId: 7 }) },
     };
     prisma.$transaction = jest.fn().mockImplementation(async (callback: any) => callback(prisma));
     log = { log: jest.fn().mockResolvedValue(undefined) };
     service = new AttachmentsService(prisma, log);
+  });
+
+  it.each(["DESIGNER", "DESIGN_MANAGER"])("allows %s to read and upload their own feedback screenshots", async (role) => {
+    jest.spyOn(service as any, "storeFile").mockResolvedValue({ fileName: "feedback.png", extension: ".png", storagePath: "attachments/feedback.png" });
+    prisma.attachment.create.mockResolvedValue({ id: 31, fileName: "feedback.png" });
+
+    await service.findByFeedback(7, 7, role);
+    await service.uploadFeedbackAttachment(7, file, 7, role);
+
+    expect(prisma.attachment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { feedbackId: 7, deletedAt: null } }));
+    expect(prisma.attachment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ feedbackId: 7, category: "FEEDBACK_SCREENSHOT", uploadedById: 7 }) }));
   });
 
   it.each(["NOT_STARTED", "SUBMITTED_FOR_REVIEW", "APPROVED", "COMPLETED"])("rejects completed attachment upload in %s", async (status) => {

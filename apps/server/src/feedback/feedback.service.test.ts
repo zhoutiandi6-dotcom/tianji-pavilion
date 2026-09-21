@@ -24,13 +24,14 @@ describe("FeedbackService V2 authorization", () => {
     expect(prisma.pilotFeedback.count).toHaveBeenCalledWith({ where: { userId: 11 } });
   });
 
+  it.each(["OPERATION", "OPERATION_MANAGER", "DESIGNER", "DESIGN_MANAGER"])("allows %s to use feedback without granting status management", async (role) => {
+    expect(service.canAccess(role)).toBe(true);
+    await expect(service.updateStatus(7, "PROCESSING", undefined, { sub: 2, role })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it("does not turn OPERATION_MANAGER into global rejection authority", async () => {
     await expect(service.updateStatus(7, "REJECTED", "重复问题", { sub: 2, role: "OPERATION_MANAGER" })).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it("rejects all state changes by ordinary operations", async () => {
-    await expect(service.updateStatus(7, "PROCESSING", undefined, { sub: 2, role: "OPERATION" })).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it("requires an explanation for administrator completed/deferred/rejected decisions", async () => {
