@@ -60,6 +60,18 @@
   margin-bottom: 16px;
 }
 
+.currentReturnAlert {
+  margin-bottom: 16px;
+  border-color: #f3c58b;
+  background: #fff8ed;
+}
+
+.returnedImageLink {
+  border-color: #e8a34a;
+  color: #9a5b12;
+  background: #fffdf8;
+}
+
 .basicInfo :global(.ant-descriptions-view) {
   overflow: hidden;
   border-color: #e4e5e2;
@@ -97,6 +109,13 @@
 .imageTaskCard {
   border-color: #e3e4e1;
   box-shadow: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.returnedImageTaskCard {
+  border-color: #e8a34a;
+  box-shadow: 0 0 0 3px rgba(232, 163, 74, 0.2);
+  background: #fffaf2;
 }
 
 .imageTaskCard :global(.ant-card-head) {

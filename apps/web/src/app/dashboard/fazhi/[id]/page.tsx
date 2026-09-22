@@ -219,6 +219,7 @@ export default function FazhiDetailPage() {
   const [materialLinks, setMaterialLinks] = useState("");
   const [preview, setPreview] = useState<{ open: boolean; url?: string; title?: string; attachmentId?: number }>({ open: false });
   const [selectedImageTaskId, setSelectedImageTaskId] = useState<number | null>(null);
+  const [returnedImageTaskId, setReturnedImageTaskId] = useState<number | null>(null);
   const [checkedImageTaskIds, setCheckedImageTaskIds] = useState<number[]>([]);
   const [batchDesignerId, setBatchDesignerId] = useState<number | undefined>();
   const [imageSourceType, setImageSourceType] = useState<ImageSourceType>("reference");
@@ -229,6 +230,7 @@ export default function FazhiDetailPage() {
   const loadAttachmentImage = useAttachmentImages();
   const taskReadVersion = useRef(0);
   const uploadInFlightFiles = useRef(new WeakSet<File>());
+  const returnedImageHighlightTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const role = currentUser?.role || "";
   const isAdmin = ["OWNER", "SUPER_ADMIN"].includes(role);
@@ -330,6 +332,10 @@ export default function FazhiDetailPage() {
     }
   }, [task?.id, task?.imageTasks?.length, selectedImageTaskId]);
 
+  useEffect(() => () => {
+    if (returnedImageHighlightTimeout.current) clearTimeout(returnedImageHighlightTimeout.current);
+  }, []);
+
   useEffect(() => {
     if (!currentImageSources.length) {
       setSelectedSourceKey(undefined);
@@ -414,6 +420,13 @@ export default function FazhiDetailPage() {
     setImageSourceType(getDefaultImageSourceType(row));
     setSelectedSourceKey(undefined);
     setAnnotationExpanded(false);
+  };
+
+  const locateReturnedImageTask = (imageTaskId: number) => {
+    document.getElementById(`image-task-${imageTaskId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setReturnedImageTaskId(imageTaskId);
+    if (returnedImageHighlightTimeout.current) clearTimeout(returnedImageHighlightTimeout.current);
+    returnedImageHighlightTimeout.current = setTimeout(() => setReturnedImageTaskId(null), 1800);
   };
 
   const getRowValue = (row: any, key: string) => {
@@ -763,6 +776,23 @@ export default function FazhiDetailPage() {
 
   if (loading) return <SecondaryPageShell><div className={styles.loadingState}><Spin size="large" /><Text type="secondary">正在加载法旨信息</Text></div></SecondaryPageShell>;
   if (!task) return <SecondaryPageShell><SecondaryEmptyState description="法旨暂时无法显示" /></SecondaryPageShell>;
+  let currentReturn: { reason: string; imageTasks: any[] } | null = null;
+  if (task.workflowStatus === "OPS_REJECTED") {
+    const latestReturnEvent = (task.auditEvents || []).find((event: any) => event.action === "ops_approval_rejected");
+    if (latestReturnEvent) {
+      try {
+        const metadata = latestReturnEvent.metadata ? JSON.parse(latestReturnEvent.metadata) : {};
+        const issueImageTaskIds = Array.isArray(metadata.issueImageTaskIds) ? metadata.issueImageTaskIds.map(Number).filter(Number.isSafeInteger) : [];
+        const imageTasksById = new Map((task.imageTasks || []).map((row: any) => [row.id, row]));
+        currentReturn = {
+          reason: String(metadata.reason || ""),
+          imageTasks: issueImageTaskIds.map((imageTaskId: number) => imageTasksById.get(imageTaskId)).filter(Boolean),
+        };
+      } catch {
+        // A malformed historical audit payload must not block the decree detail page.
+      }
+    }
+  }
   const selectedGrouped = groupByCategory(selectedImageTask?.attachments || []);
 
   const canSelectedReview = selectedImageTask && (isDesignManager || isAdmin) && selectedImageTask.status === "SUBMITTED_FOR_REVIEW";
@@ -864,6 +894,27 @@ export default function FazhiDetailPage() {
         )}
       >
         {canEditDraft && <Alert className={styles.infoAlert} type="info" showIcon message="点击“保存”会依次保存主单信息和所有已修改的图片需求；任一图片保存失败会明确提示，且不会显示整体成功。" />}
+        {currentReturn && currentReturn.imageTasks.length > 0 && (
+          <Alert
+            className={styles.currentReturnAlert}
+            type="warning"
+            showIcon
+            message="运营主管退回补充"
+            description={(
+              <Space direction="vertical" size={6}>
+                <span>本次需修改：</span>
+                <Space wrap size={[6, 6]}>
+                  {currentReturn.imageTasks.map((row: any) => (
+                    <Button key={row.id} size="small" className={styles.returnedImageLink} onClick={() => locateReturnedImageTask(row.id)}>
+                      #{row.imageIndex} {row.imageTitle || `图片 ${row.imageIndex}`}
+                    </Button>
+                  ))}
+                </Space>
+                <span>原因：{currentReturn.reason || "主管未填写补充说明"}</span>
+              </Space>
+            )}
+          />
+        )}
         <Descriptions className={styles.basicInfo} column={{ xs: 1, md: 4 }} size="small" bordered>
           <Descriptions.Item label="状态">{taskStatusLabels[task.workflowStatus] || task.workflowStatus}</Descriptions.Item>
           <Descriptions.Item label="店铺">
@@ -1167,7 +1218,8 @@ export default function FazhiDetailPage() {
               const showListCompleted = !["WAITING_OPS_APPROVAL", "PENDING_ASSIGNMENT", "NOT_STARTED"].includes(row.status) || ["DESIGN_APPROVED", "COMPLETED"].includes(task.workflowStatus);
               return (
                 <Card
-                  className={styles.imageTaskCard}
+                  id={`image-task-${row.id}`}
+                  className={`${styles.imageTaskCard} ${returnedImageTaskId === row.id ? styles.returnedImageTaskCard : ""}`}
                   key={row.id}
                   size="small"
                   title={
@@ -1180,6 +1232,7 @@ export default function FazhiDetailPage() {
                         />
                       )}
                       <Text strong>#{row.imageIndex} {row.imageTitle || `图片 ${row.imageIndex}`}</Text>
+                      {currentReturn?.imageTasks.some((item: any) => item.id === row.id) && <Tag color="orange">需修改</Tag>}
                       <Tag color={imageStatusColors[row.status]}>{imageStatusLabels[row.status] || row.status}</Tag>
                     </Space>
                   }
