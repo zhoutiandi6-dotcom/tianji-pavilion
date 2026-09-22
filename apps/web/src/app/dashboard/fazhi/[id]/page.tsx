@@ -1,7 +1,7 @@
 'use client';
 
 import { ClipboardEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Descriptions, Dropdown, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, message } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, MoreOutlined, RollbackOutlined, SaveOutlined, SendOutlined, StopOutlined, UploadOutlined } from "@ant-design/icons";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import ImageAnnotationViewer from "@/components/ImageAnnotationViewer";
@@ -217,7 +217,7 @@ export default function FazhiDetailPage() {
   const [mainDraft, setMainDraft] = useState<Record<string, any>>({});
   const [editingRows, setEditingRows] = useState<Record<number, any>>({});
   const [materialLinks, setMaterialLinks] = useState("");
-  const [preview, setPreview] = useState<{ open: boolean; url?: string; title?: string }>({ open: false });
+  const [preview, setPreview] = useState<{ open: boolean; url?: string; title?: string; attachmentId?: number }>({ open: false });
   const [selectedImageTaskId, setSelectedImageTaskId] = useState<number | null>(null);
   const [checkedImageTaskIds, setCheckedImageTaskIds] = useState<number[]>([]);
   const [batchDesignerId, setBatchDesignerId] = useState<number | undefined>();
@@ -306,6 +306,7 @@ export default function FazhiDetailPage() {
   const currentImageSource = currentImageSources.find((source) => source.key === selectedSourceKey) || currentImageSources[0];
   const annotationAttachmentId = currentImageSource?.kind === "attachment" ? currentImageSource.attachment.id : undefined;
   const annotationState = useImageAnnotations(annotationAttachmentId);
+  const previewAnnotationState = useImageAnnotations(preview.attachmentId);
   const hasUnsavedChanges = annotationState.anyDirty || (!!task && (Object.keys(editingRows).length > 0 || materialLinks !== (task.materialLinks || "") || mainDraftChanged));
   const currentImageSourceSignature = currentImageSources.map((source) => source.key).join("|");
 
@@ -460,7 +461,7 @@ export default function FazhiDetailPage() {
   const previewAttachment = async (attachment: any) => {
     try {
       const url = await loadAttachmentImage(attachment);
-      setPreview({ open: true, url, title: attachment.fileName });
+      setPreview({ open: true, url, title: attachment.fileName, attachmentId: attachment.id });
     } catch (err) {
       console.error("[fazhi-detail] preview failed", err);
       message.error(getErrorMessage(err, "预览失败，请稍后重试"));
@@ -1221,7 +1222,13 @@ export default function FazhiDetailPage() {
         onCancel={() => setPreview((prev) => ({ ...prev, open: false }))}
         width={900}
       >
-        {preview.url && <Image src={preview.url} alt={preview.title || "preview"} style={{ maxWidth: "100%" }} />}
+        {preview.url && <ImageAnnotationViewer
+          mode="review"
+          imageUrl={preview.url}
+          imageTitle={preview.title}
+          annotations={previewAnnotationState.annotations}
+          disabledReason={previewAnnotationState.loading ? "正在读取已保存标注" : previewAnnotationState.error}
+        />}
       </Modal>
       </div>
     </SecondaryPageShell>
