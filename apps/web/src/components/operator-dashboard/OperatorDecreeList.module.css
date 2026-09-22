@@ -1,0 +1,5 @@
+.returnedTaskRow > :global(td) {
+  background: #fff7d6 !important;
+  box-shadow: inset 3px 0 0 #d89614;
+  transition: background 240ms ease, box-shadow 240ms ease;
+}

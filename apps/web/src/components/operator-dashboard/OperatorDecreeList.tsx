@@ -6,6 +6,16 @@ import { DownloadOutlined, EyeOutlined, MoreOutlined, PlusOutlined, SearchOutlin
 import { useRouter, useSearchParams } from 'next/navigation';
 import { attachmentApi, getErrorMessage, taskApi } from '@/lib/api';
 import { DataTableCard, FilterCard, SecondaryEmptyState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from '@/components/secondary-page';
+import styles from './OperatorDecreeList.module.css';
+
+type ListReturnContext = {
+  scrollTop: number;
+  lastViewedTaskId: number;
+};
+
+function listContextKey(pathWithQuery: string) {
+  return `tianji:operator-decree-list:${pathWithQuery}`;
+}
 
 const viewOptions = [
   ['all', '全部法旨'],
@@ -50,9 +60,11 @@ export default function OperatorDecreeList() {
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
   const [loading, setLoading] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [data, setData] = useState<any>({ items: [], total: 0, operatorScopeCounts: {} });
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [searchText, setSearchText] = useState('');
+  const [highlightedId, setHighlightedId] = useState<number | null>(null);
 
   const filters = useMemo(() => {
     const params = new URLSearchParams(queryString);
@@ -82,6 +94,7 @@ export default function OperatorDecreeList() {
 
   const load = async () => {
     setLoading(true);
+    setHasLoaded(false);
     try {
       const response = await taskApi.findAll(filters);
       setData(response.data.data || response.data);
@@ -90,11 +103,44 @@ export default function OperatorDecreeList() {
       message.error(getErrorMessage(error, '加载我的法旨失败'));
     } finally {
       setLoading(false);
+      setHasLoaded(true);
     }
   };
 
   useEffect(() => { load(); }, [queryString]);
   useEffect(() => { setSearchText(filters.search); }, [filters.search]);
+
+  useEffect(() => {
+    if (loading || !hasLoaded || typeof window === 'undefined') return;
+    const pathWithQuery = `${window.location.pathname}${window.location.search}`;
+    let context: ListReturnContext | null = null;
+    try {
+      context = JSON.parse(sessionStorage.getItem(listContextKey(pathWithQuery)) || 'null');
+    } catch {
+      context = null;
+    }
+    if (!context || !Number.isFinite(context.scrollTop) || !Number.isSafeInteger(context.lastViewedTaskId)) return;
+
+    const target = (data.items || []).find((row: any) => row.id === context!.lastViewedTaskId);
+    if (target) setHighlightedId(target.id);
+
+    const restoreFrame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: context!.scrollTop, behavior: 'auto' });
+      window.requestAnimationFrame(() => {
+        if (target && Math.abs(window.scrollY - context!.scrollTop) > 12) {
+          document.getElementById(`operator-task-${target.id}`)?.scrollIntoView({ behavior: 'auto', block: 'center' });
+        }
+      });
+    });
+    const clearTimer = window.setTimeout(() => {
+      setHighlightedId(null);
+      sessionStorage.removeItem(listContextKey(pathWithQuery));
+    }, 2600);
+    return () => {
+      window.cancelAnimationFrame(restoreFrame);
+      window.clearTimeout(clearTimer);
+    };
+  }, [data.items, hasLoaded, loading, queryString]);
 
   const change = (patch: Record<string, any>) => sync({ ...filters, ...patch });
   const items = data.items || [];
@@ -111,8 +157,9 @@ export default function OperatorDecreeList() {
   });
 
   const openDetail = (id: number) => {
-    const returnTo = `/dashboard/fazhi?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '' && value !== 1 && value !== 20).map(([key, value]) => [key, String(value)])).toString()}`;
-    router.push(`/dashboard/fazhi/${id}?returnTo=${encodeURIComponent(returnTo)}`);
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    sessionStorage.setItem(listContextKey(returnTo), JSON.stringify({ scrollTop: window.scrollY, lastViewedTaskId: id } satisfies ListReturnContext));
+    router.push(`/dashboard/fazhi/${id}?returnTo=${encodeURIComponent(returnTo)}`, { scroll: false });
   };
 
   const deleteDrafts = async (ids = selectedIds) => {
@@ -204,7 +251,18 @@ export default function OperatorDecreeList() {
     </FilterCard>
     <DataTableCard title="法旨列表" extra={<span>共 {data.total || 0} 条法旨</span>}>
       {filters.view === 'draft' && <div style={{ marginBottom: 12 }}><Popconfirm title="仅删除当前选中的草稿，确认继续？" onConfirm={() => deleteDrafts()}><Button danger disabled={!allDrafts}>批量删除草稿</Button></Popconfirm>{selectedIds.length > 0 && !allDrafts && <span style={{ marginLeft: 8, color: '#b91c1c' }}>仅可选择草稿删除</span>}</div>}
-      <Table rowKey="id" size="middle" loading={loading} columns={columns} dataSource={items} scroll={{ x: 1450 }} pagination={false} locale={{ emptyText: <SecondaryEmptyState description={emptyText(filters.view)} /> }} />
+      <Table
+        rowKey="id"
+        size="middle"
+        loading={loading}
+        columns={columns}
+        dataSource={items}
+        scroll={{ x: 1450 }}
+        pagination={false}
+        rowClassName={(row: any) => row.id === highlightedId ? (styles.returnedTaskRow || '') : ''}
+        onRow={(row: any) => ({ id: `operator-task-${row.id}` })}
+        locale={{ emptyText: <SecondaryEmptyState description={emptyText(filters.view)} /> }}
+      />
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}><Pagination current={filters.page} pageSize={filters.pageSize} total={data.total || 0} showSizeChanger showTotal={(total) => `共 ${total} 条`} onChange={(page, pageSize) => change({ page, pageSize })} /></div>
     </DataTableCard>
   </SecondaryPageShell>;
