@@ -45,6 +45,13 @@ describe("WeeklyOperationsApprovalPlansService", () => {
     await expect(service.addDecrees({ weekStart: currentWeekStart(), decreeIds: [11] }, 9, "OPERATION_MANAGER")).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it("turns the database active-occupancy race into a clear retryable conflict", async () => {
+    prisma.$transaction.mockRejectedValueOnce({ code: "P2002", meta: { target: ["decreeId"] } });
+
+    await expect(service.addDecrees({ weekStart: currentWeekStart(), decreeIds: [11] }, 9, "OPERATION_MANAGER"))
+      .rejects.toMatchObject({ message: "该法旨已被其他周计划占用，请刷新后重试。" });
+  });
+
   it("uses MIDWEEK_ADDITION for subsequent current-week additions", async () => {
     prisma.weeklyOperationsApprovalPlan.findUnique.mockResolvedValue({ id: 41 });
     prisma.weeklyOperationsApprovalPlanItem.count.mockResolvedValue(1);
