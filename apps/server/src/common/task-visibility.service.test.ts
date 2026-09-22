@@ -1,5 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
-import { currentOperationsApprovalPlanMembershipWhere, DESIGN_UNFINISHED_IMAGE_STATUSES, TaskVisibilityService } from "./task-visibility.service";
+import { Capability, currentOperationsApprovalPlanMembershipWhere, DESIGN_UNFINISHED_IMAGE_STATUSES, TaskVisibilityService } from "./task-visibility.service";
 
 describe("TaskVisibilityService", () => {
   const service = new TaskVisibilityService();
@@ -28,6 +28,53 @@ describe("TaskVisibilityService", () => {
 
   it("rejects non design managers from design manager scopes", () => {
     expect(() => service.scopeWhere("design-reviews", "DESIGNER", 9)).toThrow(ForbiddenException);
+  });
+
+  it("resolves the Phase 2 operations scope contract without enabling group behavior", () => {
+    expect(service.resolveDataScope({ role: "OPERATION", userId: 7 })).toEqual({ type: "SELF" });
+    expect(service.resolveDataScope({ role: "OPERATION", userId: 7, membershipRole: "GROUP_LEADER", groupId: 3 })).toEqual({ type: "GROUP", groupId: 3 });
+    expect(service.resolveDataScope({ role: "OPERATION_MANAGER", userId: 8 })).toEqual({ type: "ALL_OPERATIONS" });
+    expect(service.resolveDataScope({ role: "OWNER", userId: 1 })).toEqual({ type: "GLOBAL_ADMIN" });
+  });
+
+  it("keeps data scope independent from operation capability", () => {
+    expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "TASK_VIEW")).toBe(true);
+    expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "TASK_APPROVE")).toBe(true);
+    expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "TASK_DELETE")).toBe(false);
+    expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "ORG_MANAGE")).toBe(false);
+  });
+
+  it("declares every capability used by the Phase 2 contract", () => {
+    const capabilities: Capability[] = [
+      "TASK_VIEW", "TASK_CREATE", "TASK_EDIT", "TASK_DELETE", "TASK_SUBMIT", "TASK_APPROVE", "TASK_REJECT", "TASK_ROLLBACK",
+      "ATTACHMENT_VIEW", "ATTACHMENT_UPLOAD", "IMAGE_TASK_VIEW", "IMAGE_TASK_EDIT", "DASHBOARD_VIEW", "STATISTICS_VIEW",
+      "WEEKLY_PLAN_VIEW", "WEEKLY_PLAN_EDIT", "FEEDBACK_VIEW", "FEEDBACK_SUBMIT", "FEEDBACK_STATUS_CHANGE", "ORG_VIEW", "ORG_MANAGE",
+    ];
+    expect(capabilities).toHaveLength(21);
+  });
+
+  it("shadows the legacy direct-task access decisions for all active roles", () => {
+    const submitted = { creatorId: 7, workflowStatus: "SUBMITTED", imageTasks: [{ designerId: 9 }] };
+    const draft = { creatorId: 7, workflowStatus: "DRAFT", imageTasks: [{ designerId: 9 }] };
+    expect(service.canAccessTask({ role: "OPERATION", userId: 7 }, submitted)).toBe(true);
+    expect(service.canAccessTask({ role: "OPERATION", userId: 8 }, submitted)).toBe(false);
+    expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 8 }, submitted)).toBe(true);
+    expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 8 }, draft)).toBe(false);
+    expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 7 }, draft)).toBe(true);
+    expect(service.canAccessTask({ role: "DESIGN_MANAGER", userId: 4 }, submitted)).toBe(false);
+    expect(service.canAccessTask({ role: "DESIGNER", userId: 9 }, { ...submitted, workflowStatus: "IN_DESIGN" })).toBe(true);
+    expect(service.canAccessTask({ role: "DESIGNER", userId: 10 }, { ...submitted, workflowStatus: "IN_DESIGN" })).toBe(false);
+    expect(service.canAccessTask({ role: "OWNER", userId: 1 }, draft)).toBe(true);
+  });
+
+  it("shadows current main-task edit and approval boundaries without activating a new policy", () => {
+    expect(service.canEditTask({ role: "OPERATION", userId: 7 }, { creatorId: 7, workflowStatus: "DRAFT" })).toBe(true);
+    expect(service.canEditTask({ role: "OPERATION", userId: 7 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(false);
+    expect(service.canEditTask({ role: "OPERATION_MANAGER", userId: 8 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(true);
+    expect(service.canEditTask({ role: "DESIGN_MANAGER", userId: 4 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(false);
+    expect(service.canApproveTask({ role: "OPERATION_MANAGER", userId: 8 }, { workflowStatus: "SUBMITTED" })).toBe(true);
+    expect(service.canApproveTask({ role: "OPERATION_MANAGER", userId: 8 }, { workflowStatus: "DRAFT" })).toBe(false);
+    expect(service.canApproveTask({ role: "OPERATION", userId: 7 }, { workflowStatus: "SUBMITTED" })).toBe(false);
   });
 
   it("gates OPS_APPROVED design-manager visibility on the current operations plan", () => {

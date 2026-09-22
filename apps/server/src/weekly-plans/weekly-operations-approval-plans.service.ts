@@ -66,6 +66,10 @@ export class WeeklyOperationsApprovalPlansService {
     return Boolean(task?.deletedAt || task?.workflowStatus === "CANCELLED");
   }
 
+  private isActiveDecreeOccupancyConflict(error: any) {
+    return error?.code === "P2002" && Array.isArray(error?.meta?.target) && error.meta.target.includes("decreeId");
+  }
+
   async initializeWeek(weekStart: string, userId: number, role: string) {
     this.assertManager(role);
     const range = this.resolveRange(weekStart);
@@ -122,28 +126,35 @@ export class WeeklyOperationsApprovalPlansService {
     this.assertWritableRange(range);
     const decreeIds = [...new Set(dto.decreeIds.map(Number).filter(Number.isInteger))];
     if (!decreeIds.length) throw new BadRequestException("Select at least one decree");
-    return this.prisma.$transaction(async (tx: any) => {
-      const { plan, created } = await this.getOrCreatePlan(tx, range, userId, userId);
-      const [existingOnPlan, activeMemberships, decrees] = await Promise.all([
-        tx.weeklyOperationsApprovalPlanItem.findMany({ where: { planId: plan.id, decreeId: { in: decreeIds } }, select: { decreeId: true } }),
-        tx.weeklyOperationsApprovalPlanItem.findMany({ where: { decreeId: { in: decreeIds }, removedAt: null }, select: { decreeId: true, planId: true } }),
-        tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: "OPS_APPROVED", deletedAt: null }, select: { id: true, serialNumber: true } }),
-      ]);
-      if (decrees.length !== decreeIds.length) throw new BadRequestException("Only operations-approved decrees can be added to a plan");
-      if (existingOnPlan.length || activeMemberships.length) throw new ConflictException("One or more decrees are already in an active weekly approval plan");
-      const activeCount = await tx.weeklyOperationsApprovalPlanItem.count({ where: { planId: plan.id, removedAt: null } });
-      const sourceType = this.sourceFor(range, activeCount);
-      const snapshots = await Promise.all(decreeIds.map(async (decreeId) => ({ decreeId, count: await this.activeImageCount(tx, decreeId) })));
-      const invalid = snapshots.filter((item) => item.count <= 0);
-      if (invalid.length) throw new BadRequestException("Selected decree has no active image tasks");
-      await tx.weeklyOperationsApprovalPlanItem.createMany({
-        data: snapshots.map((item) => ({ planId: plan.id, decreeId: item.decreeId, plannedImageCountSnapshot: item.count, sourceType, addedById: userId })),
+    try {
+      return await this.prisma.$transaction(async (tx: any) => {
+        const { plan, created } = await this.getOrCreatePlan(tx, range, userId, userId);
+        const [existingOnPlan, activeMemberships, decrees] = await Promise.all([
+          tx.weeklyOperationsApprovalPlanItem.findMany({ where: { planId: plan.id, decreeId: { in: decreeIds } }, select: { decreeId: true } }),
+          tx.weeklyOperationsApprovalPlanItem.findMany({ where: { decreeId: { in: decreeIds }, removedAt: null }, select: { decreeId: true, planId: true } }),
+          tx.task.findMany({ where: { id: { in: decreeIds }, workflowStatus: "OPS_APPROVED", deletedAt: null }, select: { id: true, serialNumber: true } }),
+        ]);
+        if (decrees.length !== decreeIds.length) throw new BadRequestException("Only operations-approved decrees can be added to a plan");
+        if (existingOnPlan.length || activeMemberships.length) throw new ConflictException("One or more decrees are already in an active weekly approval plan");
+        const activeCount = await tx.weeklyOperationsApprovalPlanItem.count({ where: { planId: plan.id, removedAt: null } });
+        const sourceType = this.sourceFor(range, activeCount);
+        const snapshots = await Promise.all(decreeIds.map(async (decreeId) => ({ decreeId, count: await this.activeImageCount(tx, decreeId) })));
+        const invalid = snapshots.filter((item) => item.count <= 0);
+        if (invalid.length) throw new BadRequestException("Selected decree has no active image tasks");
+        await tx.weeklyOperationsApprovalPlanItem.createMany({
+          data: snapshots.map((item) => ({ planId: plan.id, decreeId: item.decreeId, plannedImageCountSnapshot: item.count, sourceType, addedById: userId })),
+        });
+        await tx.auditEvent.create({
+          data: { resourceType: "weekly_operations_approval_plan", resourceId: plan.id, action: "weekly_operations_approval_plan_items_added", operatorId: userId, metadata: JSON.stringify({ decreeIds, sourceType, created }) },
+        });
+        return { planId: plan.id, addedDecreeCount: decreeIds.length, addedImageCount: snapshots.reduce((sum, item) => sum + item.count, 0), sourceType };
       });
-      await tx.auditEvent.create({
-        data: { resourceType: "weekly_operations_approval_plan", resourceId: plan.id, action: "weekly_operations_approval_plan_items_added", operatorId: userId, metadata: JSON.stringify({ decreeIds, sourceType, created }) },
-      });
-      return { planId: plan.id, addedDecreeCount: decreeIds.length, addedImageCount: snapshots.reduce((sum, item) => sum + item.count, 0), sourceType };
-    });
+    } catch (error) {
+      if (this.isActiveDecreeOccupancyConflict(error)) {
+        throw new ConflictException("该法旨已被其他周计划占用，请刷新后重试。");
+      }
+      throw error;
+    }
   }
 
   async removeDecreeItem(itemId: number, reason: string, userId: number, role: string) {

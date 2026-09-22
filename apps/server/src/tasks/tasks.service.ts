@@ -356,14 +356,7 @@ export class TasksService {
   }
 
   private canView(task: any, userRole?: string, userId?: number) {
-    if (!userRole || ADMIN_ROLES.includes(userRole)) return true;
-    if (userRole === "OPERATION") return task.creatorId === userId;
-    if (userRole === "OPERATION_MANAGER") return task.workflowStatus !== "DRAFT" || task.creatorId === userId;
-    if (userRole === "DESIGN_MANAGER") return DESIGN_VISIBLE_STATUSES.includes(task.workflowStatus);
-    if (userRole === "DESIGNER") {
-      return DESIGN_VISIBLE_STATUSES.includes(task.workflowStatus) && task.imageTasks?.some((it: any) => it.designerId === userId);
-    }
-    return false;
+    return this.visibility.canAccessTask({ role: userRole, userId }, task);
   }
 
   private canBatchPriority(task: any, userRole?: string, userId?: number) {

@@ -88,6 +88,11 @@ model User {
   weeklyOperationsApprovalPlansCreated WeeklyOperationsApprovalPlan[]     @relation("WeeklyOperationsApprovalPlanCreatedBy")
   weeklyOperationsApprovalPlanItemsAdded   WeeklyOperationsApprovalPlanItem[] @relation("WeeklyOperationsApprovalPlanItemAddedBy")
   weeklyOperationsApprovalPlanItemsRemoved WeeklyOperationsApprovalPlanItem[] @relation("WeeklyOperationsApprovalPlanItemRemovedBy")
+  operationGroupsCreated OperationGroup[] @relation("OperationGroupCreator")
+  operationGroupsDeactivated OperationGroup[] @relation("OperationGroupDeactivatedBy")
+  operationMemberships OperationMembership[] @relation("OperationMembershipUser")
+  operationMembershipsAssigned OperationMembership[] @relation("OperationMembershipAssignedBy")
+  operationMembershipsEnded OperationMembership[] @relation("OperationMembershipEndedBy")
   operationLogs       OperationLog[]
   uploadedAttachments Attachment[]
   announcements       Announcement[]
@@ -96,6 +101,55 @@ model User {
 
   @@index([roleId])
   @@map("users")
+}
+
+// Operations organization is intentionally temporal. A user's current group
+// is derived from OperationMembership where effectiveTo is null; User never
+// stores a mutable groupId because that would overwrite historical evidence.
+model OperationGroup {
+  id              Int       @id @default(autoincrement())
+  name            String    @unique
+  status          String    @default("ACTIVE")
+  createdById     Int
+  deactivatedAt   DateTime?
+  deactivatedById Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  createdBy       User      @relation("OperationGroupCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  deactivatedBy   User?     @relation("OperationGroupDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: Restrict)
+  memberships     OperationMembership[]
+  taskSnapshots   Task[]    @relation("TaskOperationGroupSnapshot")
+
+  @@index([status])
+  @@map("operation_groups")
+}
+
+model OperationMembership {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  groupId         Int
+  memberRole      String    @default("MEMBER")
+  effectiveFrom   DateTime  @default(now())
+  effectiveTo     DateTime?
+  assignedById    Int
+  endedById       Int?
+  reason          String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User      @relation("OperationMembershipUser", fields: [userId], references: [id], onDelete: Restrict)
+  group           OperationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  assignedBy      User      @relation("OperationMembershipAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  endedBy         User?     @relation("OperationMembershipEndedBy", fields: [endedById], references: [id], onDelete: Restrict)
+  taskSnapshots   Task[]    @relation("TaskOperationMembershipSnapshot")
+
+  @@index([userId])
+  @@index([groupId])
+  @@index([userId, effectiveTo])
+  @@index([groupId, effectiveTo])
+  @@index([groupId, memberRole, effectiveTo])
+  @@map("operation_memberships")
 }
 
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
@@ -167,12 +221,17 @@ model Task {
   approvalComment         String?
   approvedAt              String?
   creatorId               Int
+  operationGroupSnapshotId Int?
+  operationMembershipSnapshotId Int?
+  operationSnapshotAt     DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
   deletedAt               DateTime?
   deletedById             Int?
 
   creator         User             @relation("TaskCreator", fields: [creatorId], references: [id])
+  operationGroupSnapshot OperationGroup? @relation("TaskOperationGroupSnapshot", fields: [operationGroupSnapshotId], references: [id], onDelete: Restrict)
+  operationMembershipSnapshot OperationMembership? @relation("TaskOperationMembershipSnapshot", fields: [operationMembershipSnapshotId], references: [id], onDelete: Restrict)
   store           Store?           @relation(fields: [storeId], references: [id])
   requirementType RequirementType? @relation(fields: [requirementTypeId], references: [id])
   approvalRecords ApprovalRecord[]
@@ -182,6 +241,8 @@ model Task {
   weeklyOperationsApprovalPlanItems WeeklyOperationsApprovalPlanItem[]
 
   @@index([creatorId])
+  @@index([operationGroupSnapshotId])
+  @@index([operationMembershipSnapshotId])
   @@index([storeId])
   @@index([requirementTypeId])
   @@index([deadline])
