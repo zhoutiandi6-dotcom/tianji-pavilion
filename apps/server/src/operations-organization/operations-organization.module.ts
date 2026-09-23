@@ -1,8 +1,13 @@
-import { Module } from "@nestjs/common";
+import { Global, Module } from "@nestjs/common";
 import { OperationsOrganizationService } from "./operations-organization.service";
+import { OperationsApprovalRoutingService } from "./operations-approval-routing.service";
+import { OperationsOrganizationController } from "./operations-organization.controller";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 
+@Global()
 @Module({
-  providers: [OperationsOrganizationService],
-  exports: [OperationsOrganizationService],
+  controllers: [OperationsOrganizationController],
+  providers: [OperationsOrganizationService, OperationsApprovalRoutingService, TaskVisibilityService],
+  exports: [OperationsOrganizationService, OperationsApprovalRoutingService],
 })
 export class OperationsOrganizationModule {}

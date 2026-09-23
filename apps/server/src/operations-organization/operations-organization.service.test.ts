@@ -51,7 +51,25 @@ describe("OperationsOrganizationService", () => {
     const service = new OperationsOrganizationService(prisma);
     await service.getActiveGroupLeader(3);
     expect(prisma.operationMembership.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { groupId: 3, memberRole: "GROUP_LEADER", effectiveTo: null },
+      where: expect.objectContaining({
+        groupId: 3,
+        memberRole: "GROUP_LEADER",
+        effectiveFrom: expect.objectContaining({ lte: expect.any(Date) }),
+        OR: expect.any(Array),
+      }),
+    }));
+  });
+
+  it("reads submit membership through the supplied transaction and enforces its time range", async () => {
+    const tx: any = { operationMembership: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new OperationsOrganizationService({} as any);
+    await service.getMembershipAtInTransaction(tx, 7, at0930);
+    expect(tx.operationMembership.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        userId: 7,
+        effectiveFrom: { lte: at0930 },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at0930 } }],
+      }),
     }));
   });
 
@@ -70,5 +88,22 @@ describe("OperationsOrganizationService", () => {
     const prisma: any = { $transaction: jest.fn().mockRejectedValue({ code: "P2002" }) };
     const service = new OperationsOrganizationService(prisma);
     await expect(service.assignMembership({ userId: 7, groupId: 3, memberRole: "MEMBER", actorId: 1 })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("does not end a group leader through the ordinary member-leave operation", async () => {
+    const tx: any = { operationMembership: { findFirst: jest.fn().mockResolvedValue({ id: 4, memberRole: "GROUP_LEADER", effectiveFrom: at0930 }) } };
+    const service = new OperationsOrganizationService({ $transaction: jest.fn((callback: any) => callback(tx)) } as any);
+    await expect(service.endActiveMembership(7, 1, "离组")).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.operationMembership.update).toBeUndefined();
+  });
+
+  it("refuses moving a group leader without an explicit revoke or replacement", async () => {
+    const tx: any = {
+      operationGroup: { findUnique: jest.fn().mockResolvedValue({ id: 2, status: "ACTIVE" }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ id: 7, role: { name: "OPERATION" } }) },
+      operationMembership: { findFirst: jest.fn().mockResolvedValue({ id: 4, groupId: 1, memberRole: "GROUP_LEADER", effectiveFrom: at0930 }) },
+    };
+    const service = new OperationsOrganizationService({ $transaction: jest.fn((callback: any) => callback(tx)) } as any);
+    await expect(service.moveMembership({ userId: 7, groupId: 2, memberRole: "MEMBER", actorId: 1, reason: "调组" })).rejects.toBeInstanceOf(ConflictException);
   });
 });

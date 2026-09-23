@@ -17,7 +17,7 @@ export class TasksController {
 
   @Get("ops-approval-queue")
   async findOpsApprovalQueue(@Query() query: any, @Request() req: any) {
-    return this.service.findOpsApprovalQueue(Number(query.page || 1), Number(query.pageSize || 20), req.user.role, query);
+    return this.service.findOpsApprovalQueue(Number(query.page || 1), Number(query.pageSize || 20), req.user.role, req.user.sub, query);
   }
 
   @Post("batch/priority")

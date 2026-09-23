@@ -40,8 +40,10 @@ function Get-FormalLifecycleEnvironment {
     JWT_EXPIRES_IN=(Get-FormalEnvironmentValue 'JWT_EXPIRES_IN')
     ALLOWED_ORIGINS=(Get-FormalEnvironmentValue 'ALLOWED_ORIGINS')
     NODE_ENV=(Get-FormalEnvironmentValue 'NODE_ENV')
+    ORG_PERMISSION_ENFORCEMENT=(Get-FormalEnvironmentValue 'ORG_PERMISSION_ENFORCEMENT')
   }
-  foreach($name in @('JWT_SECRET','ALLOWED_ORIGINS','NODE_ENV')){if(-not $values[$name]){throw "DEPLOY_BLOCKED`nFormal $name is missing from production configuration."}}
+  foreach($name in @('JWT_SECRET','ALLOWED_ORIGINS','NODE_ENV','ORG_PERMISSION_ENFORCEMENT')){if(-not $values[$name]){throw "DEPLOY_BLOCKED`nFormal $name is missing from production configuration."}}
+  if($values.ORG_PERMISSION_ENFORCEMENT.Trim().ToLowerInvariant() -ne 'compatibility'){throw "DEPLOY_BLOCKED`nFormal ORG_PERMISSION_ENFORCEMENT must be compatibility for this release."}
   Write-Host "DEPLOY_ENV_DIAGNOSTIC TIANJI_DATA_ROOT=present resolved=$dataRoot classification=formal"
   [pscustomobject]@{DataRoot=$dataRoot;DatabasePath=$databasePath;Values=$values}
 }

@@ -42,6 +42,26 @@ describe("TaskVisibilityService", () => {
     expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "TASK_APPROVE")).toBe(true);
     expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "TASK_DELETE")).toBe(false);
     expect(service.hasCapability({ role: "OPERATION_MANAGER", userId: 8 }, "ORG_MANAGE")).toBe(false);
+    expect(service.hasCapability({ role: "OPERATION", userId: 7, membershipRole: "GROUP_LEADER", groupId: 3 }, "TASK_APPROVE")).toBe(true);
+    expect(service.hasCapability({ role: "OPERATION", userId: 7, membershipRole: "MEMBER", groupId: 3 }, "TASK_APPROVE")).toBe(false);
+  });
+
+  it("builds GROUP snapshot filtering only for Phase 4 shadow verification", () => {
+    expect(service.shadowGroupSnapshotWhere(3)).toEqual({ deletedAt: null, operationGroupSnapshotId: 3 });
+    expect(service.shadowGroupSnapshotWhere(3)).not.toEqual(service.shadowGroupSnapshotWhere(4));
+  });
+
+  it("formally scopes a leader to snapshot group tasks plus only their own unscoped legacy tasks", () => {
+    const leader = { role: "OPERATION", userId: 7, membershipRole: "GROUP_LEADER" as const, groupId: 3 };
+    expect(service.buildTaskVisibilityWhere(leader)).toEqual({
+      AND: [{ deletedAt: null }, { OR: [
+        { operationGroupSnapshotId: 3 },
+        { creatorId: 7, operationGroupSnapshotId: null, operationMembershipSnapshotId: null, operationSnapshotAt: null },
+      ] }],
+    });
+    expect(service.canAccessTask(leader, { creatorId: 8, workflowStatus: "SUBMITTED", operationGroupSnapshotId: 3 })).toBe(true);
+    expect(service.canAccessTask(leader, { creatorId: 8, workflowStatus: "SUBMITTED", operationGroupSnapshotId: 4 })).toBe(false);
+    expect(service.canAccessTask(leader, { creatorId: 8, workflowStatus: "SUBMITTED", operationGroupSnapshotId: null, operationMembershipSnapshotId: null, operationSnapshotAt: null })).toBe(false);
   });
 
   it("declares every capability used by the Phase 2 contract", () => {
@@ -60,6 +80,7 @@ describe("TaskVisibilityService", () => {
     expect(service.canAccessTask({ role: "OPERATION", userId: 8 }, submitted)).toBe(false);
     expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 8 }, submitted)).toBe(true);
     expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 8 }, draft)).toBe(false);
+    expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 8 }, { ...draft, operationGroupSnapshotId: 3 })).toBe(true);
     expect(service.canAccessTask({ role: "OPERATION_MANAGER", userId: 7 }, draft)).toBe(true);
     expect(service.canAccessTask({ role: "DESIGN_MANAGER", userId: 4 }, submitted)).toBe(false);
     expect(service.canAccessTask({ role: "DESIGNER", userId: 9 }, { ...submitted, workflowStatus: "IN_DESIGN" })).toBe(true);
@@ -70,7 +91,7 @@ describe("TaskVisibilityService", () => {
   it("shadows current main-task edit and approval boundaries without activating a new policy", () => {
     expect(service.canEditTask({ role: "OPERATION", userId: 7 }, { creatorId: 7, workflowStatus: "DRAFT" })).toBe(true);
     expect(service.canEditTask({ role: "OPERATION", userId: 7 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(false);
-    expect(service.canEditTask({ role: "OPERATION_MANAGER", userId: 8 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(true);
+    expect(service.canEditTask({ role: "OPERATION_MANAGER", userId: 8 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(false);
     expect(service.canEditTask({ role: "DESIGN_MANAGER", userId: 4 }, { creatorId: 7, workflowStatus: "SUBMITTED" })).toBe(false);
     expect(service.canApproveTask({ role: "OPERATION_MANAGER", userId: 8 }, { workflowStatus: "SUBMITTED" })).toBe(true);
     expect(service.canApproveTask({ role: "OPERATION_MANAGER", userId: 8 }, { workflowStatus: "DRAFT" })).toBe(false);

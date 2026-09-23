@@ -16,6 +16,8 @@ describe("DashboardRoleService", () => {
     const visibility = {
       visibleWhere: jest.fn().mockReturnValue({ deletedAt: null }),
       scopeWhere: jest.fn().mockReturnValue({ deletedAt: null }),
+      subjectForUser: jest.fn().mockResolvedValue({ role: "OPERATION", userId: 7 }),
+      buildTaskVisibilityWhere: jest.fn().mockReturnValue({ creatorId: 7, deletedAt: null }),
     };
     const weeklyDesignerPlans = { getWeekOverview: jest.fn() };
     const weeklyOperationsPlans = { getWeekOverview: jest.fn() };
@@ -125,7 +127,11 @@ describe("DashboardRoleService operator aggregation", () => {
     };
     const service = new DashboardRoleService(
       prisma,
-      { visibleWhere: jest.fn(), scopeWhere: jest.fn() } as any,
+      {
+        visibleWhere: jest.fn(), scopeWhere: jest.fn(),
+        subjectForUser: jest.fn().mockResolvedValue({ role: "OPERATION", userId: 7 }),
+        buildTaskVisibilityWhere: jest.fn().mockReturnValue({ creatorId: 7, deletedAt: null }),
+      } as any,
       { getWeekOverview: jest.fn() } as any,
       { getWeekOverview: jest.fn() } as any,
     );
@@ -207,5 +213,21 @@ describe("DashboardRoleService operator aggregation", () => {
     expect(result.operator.decreeProgress.find((item: any) => item.id === 23)).toBeUndefined();
     expect(result.operator.completedDecrees).toEqual([expect.objectContaining({ id: 23 })]);
     expect(result.operator.recentActivities).toHaveLength(2);
+  });
+
+  it("uses the frozen snapshot group range for a group leader dashboard", async () => {
+    const prisma: any = { task: { findMany: jest.fn().mockResolvedValue([]) }, auditEvent: { findMany: jest.fn() } };
+    const visibility = {
+      subjectForUser: jest.fn().mockResolvedValue({ role: "OPERATION", userId: 7, membershipRole: "GROUP_LEADER", groupId: 12 }),
+      buildTaskVisibilityWhere: jest.fn().mockReturnValue({ AND: [{ deletedAt: null }, { OR: [{ operationGroupSnapshotId: 12 }, { creatorId: 7, operationGroupSnapshotId: null, operationMembershipSnapshotId: null, operationSnapshotAt: null }] }] }),
+    };
+    const service = new DashboardRoleService(prisma, visibility as any, {} as any, {} as any);
+
+    await service.get("OPERATION", 7);
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ AND: expect.any(Array) }),
+    }));
+    expect(visibility.buildTaskVisibilityWhere).toHaveBeenCalledWith(expect.objectContaining({ groupId: 12 }));
   });
 });

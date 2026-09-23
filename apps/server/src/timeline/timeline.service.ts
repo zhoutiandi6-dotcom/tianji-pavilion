@@ -16,8 +16,9 @@ export class TimelineService {
     });
     if (!task) throw new NotFoundException("法旨不存在");
 
+    const subject = await this.visibility.subjectForUser(userRole, userId);
     const visibleTask = await this.prisma.task.findFirst({
-      where: { AND: [{ id: taskId }, this.visibility.visibleWhere(userRole, userId)] },
+      where: { AND: [{ id: taskId }, this.visibility.buildTaskVisibilityWhere(subject)] },
       select: { id: true },
     });
     if (!visibleTask) throw new ForbiddenException("无权查看该法旨的流程记录");

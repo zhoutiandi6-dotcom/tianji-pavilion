@@ -65,6 +65,32 @@ describe("TasksService compatible product mapping", () => {
     }));
   });
 
+  it("ignores server-owned organization snapshot fields supplied to draft create", async () => {
+    const created = { id: 12, serialNumber: "TEST-012" };
+    const prisma: any = {
+      task: { findFirst: jest.fn().mockResolvedValue({ id: 11 }), create: jest.fn().mockResolvedValue(created) },
+      imageTask: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      $transaction: jest.fn().mockImplementation(async (callback: any) => callback(prisma)),
+    };
+    const service = new TasksService(prisma, { log: jest.fn() } as any, { publishCreated: jest.fn() } as any, {} as any, {} as any);
+    await service.create({ operationGroupSnapshotId: 99, operationMembershipSnapshotId: 88, operationSnapshotAt: "forged" } as any, 9, "OPERATION");
+    expect(prisma.task.create.mock.calls[0][0].data).not.toHaveProperty("operationGroupSnapshotId");
+    expect(prisma.task.create.mock.calls[0][0].data).not.toHaveProperty("operationMembershipSnapshotId");
+    expect(prisma.task.create.mock.calls[0][0].data).not.toHaveProperty("operationSnapshotAt");
+  });
+
+  it("ignores server-owned organization snapshot fields supplied to task update", async () => {
+    const prisma: any = {
+      task: { findUnique: jest.fn().mockResolvedValue(draftTask), update: jest.fn().mockResolvedValue(draftTask) },
+      $transaction: jest.fn().mockImplementation(async (callback: any) => callback(prisma)),
+    };
+    const service = new TasksService(prisma, { log: jest.fn() } as any, {} as any, {} as any, { refreshPendingDecreeSnapshotInTransaction: jest.fn() } as any);
+    await service.update(1, { operationGroupSnapshotId: 99, operationMembershipSnapshotId: 88, operationSnapshotAt: "forged" } as any, 9, "OPERATION");
+    expect(prisma.task.update.mock.calls[0][0].data).not.toHaveProperty("operationGroupSnapshotId");
+    expect(prisma.task.update.mock.calls[0][0].data).not.toHaveProperty("operationMembershipSnapshotId");
+    expect(prisma.task.update.mock.calls[0][0].data).not.toHaveProperty("operationSnapshotAt");
+  });
+
   it("keeps designer list image-status filters and image metrics scoped to the current designer", async () => {
     const prisma: any = {
       task: {
@@ -137,6 +163,14 @@ describe("TasksService compatible product mapping", () => {
     const service = new TasksService(prisma, {} as any, {} as any, {} as any, {} as any);
 
     await expect(service.update(1, { requirementTypeId: 3 }, 10, "OPERATION")).rejects.toThrow("只能编辑自己的法旨");
+  });
+
+  it("does not let an operation manager edit a task merely because their data scope is global", async () => {
+    const prisma: any = { task: { findUnique: jest.fn().mockResolvedValue(draftTask) } };
+    const service = new TasksService(prisma, {} as any, {} as any, new TaskVisibilityService(), {} as any);
+
+    await expect(service.update(1, { requirementTypeId: 3 }, 8, "OPERATION_MANAGER"))
+      .rejects.toThrow("当前账号无权编辑该法旨主单");
   });
 
   it("applies a designer search filter to the image workload summary", async () => {

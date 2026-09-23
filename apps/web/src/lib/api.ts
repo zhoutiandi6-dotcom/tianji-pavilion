@@ -92,6 +92,22 @@ export const userApi = {
   findDesigners: () => api.get("/users/designers"),
 };
 
+export const operationsOrganizationApi = {
+  groups: () => api.get("/operations-organization/groups"),
+  unassigned: () => api.get("/operations-organization/unassigned-operations"),
+  readiness: () => api.get("/operations-organization/readiness"),
+  audit: () => api.get("/operations-organization/audit"),
+  createGroup: (name: string) => api.post("/operations-organization/groups", { name }),
+  renameGroup: (groupId: number, name: string) => api.patch(`/operations-organization/groups/${groupId}`, { name }),
+  deactivateGroup: (groupId: number) => api.patch(`/operations-organization/groups/${groupId}`, { status: "INACTIVE" }),
+  assign: (userId: number, groupId: number, reason?: string) => api.post("/operations-organization/memberships", { userId, groupId, reason }),
+  move: (userId: number, groupId: number, reason: string) => api.post("/operations-organization/memberships/move", { userId, groupId, reason }),
+  end: (userId: number, reason: string) => api.post("/operations-organization/memberships/end", { userId, reason }),
+  appoint: (groupId: number, userId: number, reason?: string) => api.post(`/operations-organization/groups/${groupId}/leader/appoint`, { userId, reason }),
+  replace: (groupId: number, userId: number, keepPreviousMember: boolean, reason?: string) => api.post(`/operations-organization/groups/${groupId}/leader/replace`, { userId, keepPreviousMember, reason }),
+  revoke: (groupId: number, reason?: string) => api.post(`/operations-organization/groups/${groupId}/leader/revoke`, { reason }),
+};
+
 export const rbacApi = {
   getRoles: () => api.get("/roles-permissions/roles"),
   getPermissions: () => api.get("/roles-permissions/permissions"),

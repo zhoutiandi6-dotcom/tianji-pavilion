@@ -24,7 +24,7 @@ import {
 } from "./image-task-review-history";
 import { WeeklyPlansService } from "../weekly-plans/weekly-plans.service";
 import { WeeklyOperationsApprovalPlansService } from "../weekly-plans/weekly-operations-approval-plans.service";
-import { currentOperationsApprovalPlanMembershipWhere } from "../common/task-visibility.service";
+import { currentOperationsApprovalPlanMembershipWhere, TaskVisibilityService } from "../common/task-visibility.service";
 import {
   ImageTaskDetailAttachmentDto,
   ImageTaskDetailDto,
@@ -45,6 +45,7 @@ export class ImageTasksService {
     private workflowEngine: WorkflowEngine,
     private weeklyPlans: WeeklyPlansService,
     private operationsApprovalPlans: WeeklyOperationsApprovalPlansService,
+    private visibility: TaskVisibilityService = new TaskVisibilityService(),
   ) {}
 
   async create(dto: CreateImageTaskDto, userId: number) {
@@ -95,20 +96,8 @@ export class ImageTasksService {
     return result;
   }
 
-  private canViewTask(task: any, userId: number, userRole: string) {
-    if (ADMIN_ROLES.includes(userRole)) return true;
-    if (userRole === "OPERATION") return task.creatorId === userId;
-    if (userRole === "OPERATION_MANAGER") return task.workflowStatus !== "DRAFT";
-    if (userRole === "DESIGN_MANAGER") {
-      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus)
-        && (task.workflowStatus !== "OPS_APPROVED" || task.weeklyOperationsApprovalPlanItems?.length > 0);
-    }
-    if (userRole === "DESIGNER") {
-      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus)
-        && (task.workflowStatus !== "OPS_APPROVED" || task.weeklyOperationsApprovalPlanItems?.length > 0)
-        && task.imageTasks?.some((it: any) => it.designerId === userId);
-    }
-    return false;
+  private async canViewTask(task: any, userId: number, userRole: string) {
+    return this.visibility.canAccessTask(await this.visibility.subjectForUser(userRole, userId), task);
   }
 
   async findByTask(taskId: number, userId: number, userRole: string) {
@@ -120,7 +109,7 @@ export class ImageTasksService {
       },
     });
     if (!task) throw new NotFoundException("Task not found");
-    if (!this.canViewTask(task, userId, userRole)) throw new ForbiddenException("No permission to view image tasks");
+    if (!await this.canViewTask(task, userId, userRole)) throw new ForbiddenException("No permission to view image tasks");
     const where: any = { taskId };
     if (userRole === "DESIGNER") where.designerId = userId;
     return this.prisma.imageTask.findMany({
@@ -233,7 +222,7 @@ export class ImageTasksService {
       },
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
-    if (!this.canViewTask(imageTask.task, userId, userRole)) throw new ForbiddenException("No permission to view image task");
+    if (!await this.canViewTask(imageTask.task, userId, userRole)) throw new ForbiddenException("No permission to view image task");
     if (userRole === "DESIGNER" && imageTask.designerId !== userId) throw new ForbiddenException("No permission to view image task");
 
     const auditEvents = await this.prisma.auditEvent.findMany({

@@ -8,6 +8,8 @@ import {
   WorkflowSubmitted, WorkflowWithdrawn,
 } from "../../domain-events";
 import { SUBMISSION_RESULT, SUBMISSION_TYPE } from "../submission-audit";
+import { OperationsOrganizationService } from "../../operations-organization/operations-organization.service";
+import { isOrganizationPermissionStrict } from "../../common/org-permission-enforcement";
 
 export interface WorkflowActionResult {
   task: any;
@@ -35,6 +37,7 @@ export class WorkflowEngine {
     private prisma: PrismaService,
     private eventBus: EventBus,
     private logService: OperationLogService,
+    private organization: OperationsOrganizationService,
   ) {}
 
   private async getTask(taskId: number) {
@@ -134,6 +137,7 @@ export class WorkflowEngine {
           include: { attachments: { where: { deletedAt: null }, select: { id: true, deletedAt: true } } },
           orderBy: { imageIndex: "asc" },
         },
+        creator: { select: { role: { select: { name: true } } } },
       },
     });
     if (!task || task.deletedAt) throw new NotFoundException("法旨不存在");
@@ -148,10 +152,34 @@ export class WorkflowEngine {
     const submissionType = task.workflowStatus === TASK_WORKFLOW_STATUS.OPS_REJECTED
       ? SUBMISSION_TYPE.RESUBMIT
       : SUBMISSION_TYPE.INITIAL;
+    const isInitialSubmission = task.workflowStatus === TASK_WORKFLOW_STATUS.DRAFT;
+    const isOperationCreator = task.creator?.role?.name === "OPERATION";
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      // A Task freezes its creator's organization once, on its first DRAFT ->
+      // SUBMITTED transition.  No current-session data can influence it.
+      const membership = isInitialSubmission && !task.operationSnapshotAt && isOperationCreator
+        ? await this.organization.getMembershipAtInTransaction(tx, task.creatorId, submittedAt)
+        : null;
+      if (isInitialSubmission && !task.operationSnapshotAt && isOperationCreator && !membership && isOrganizationPermissionStrict()) {
+        throw new BadRequestException("当前运营尚未加入有效运营组，请联系管理员处理后再提交。");
+      }
+      const freezeSnapshot = Boolean(isInitialSubmission && !task.operationSnapshotAt && membership);
       const stateUpdated = await tx.task.updateMany({
-        where: { id: taskId, workflowStatus: task.workflowStatus, deletedAt: null },
-        data: { workflowStatus: TASK_WORKFLOW_STATUS.SUBMITTED, submittedAt },
+        where: {
+          id: taskId,
+          workflowStatus: task.workflowStatus,
+          deletedAt: null,
+          ...(freezeSnapshot ? { operationSnapshotAt: null } : {}),
+        },
+        data: {
+          workflowStatus: TASK_WORKFLOW_STATUS.SUBMITTED,
+          submittedAt,
+          ...(freezeSnapshot ? {
+            operationGroupSnapshotId: membership.groupId,
+            operationMembershipSnapshotId: membership.id,
+            operationSnapshotAt: submittedAt,
+          } : {}),
+        },
       });
       if (stateUpdated.count !== 1) throw new ConflictException(APPROVAL_CONFLICT_MESSAGE);
       const sequence = await tx.taskSubmissionRecord.aggregate({
@@ -168,6 +196,24 @@ export class WorkflowEngine {
           result: SUBMISSION_RESULT.PENDING,
         },
       });
+      if (freezeSnapshot) {
+        await tx.auditEvent.create({
+          data: {
+            resourceType: "task",
+            resourceId: taskId,
+            action: "task.organization_snapshot_frozen",
+            operatorId: userId,
+            correlationId: `task_${taskId}`,
+            metadata: JSON.stringify({
+              taskId,
+              creatorId: task.creatorId,
+              groupId: membership.groupId,
+              membershipId: membership.id,
+              snapshotAt: submittedAt.toISOString(),
+            }),
+          },
+        });
+      }
       await tx.imageTask.updateMany({
         where: { taskId, deletedAt: null },
         data: { status: "WAITING_OPS_APPROVAL" },
@@ -216,10 +262,8 @@ export class WorkflowEngine {
   }
 
   async approve(taskId: number, userId: number, userRole: string, comment?: string): Promise<WorkflowActionResult> {
-    if (!["OPERATION_MANAGER", "OWNER", "SUPER_ADMIN"].includes(userRole)) {
-      throw new ForbiddenException("只有运营主管可以审批");
-    }
     const task = await this.getTask(taskId);
+    await this.assertOperationsApprovalAccess(task, userId, userRole, "审批");
     if (!StateMachine.canTransition(task.workflowStatus, TASK_WORKFLOW_STATUS.OPS_APPROVED, "task")) {
       throw new BadRequestException(`非法状态转换: ${task.workflowStatus} -> ${TASK_WORKFLOW_STATUS.OPS_APPROVED}`);
     }
@@ -260,7 +304,7 @@ export class WorkflowEngine {
           action: "ops_approval_approved",
           operatorId: userId,
           correlationId: `task_${taskId}`,
-          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, effectiveImageCount: activeImageCount, processedAt, legacySubmissionRecovered: legacyRecovered }),
+          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, effectiveImageCount: activeImageCount, processedAt, legacySubmissionRecovered: legacyRecovered, operationGroupSnapshotId: task.operationGroupSnapshotId ?? null, actualApproverId: userId, action: "OPS_APPROVED" }),
         },
       });
       return tx.task.findUnique({ where: { id: taskId } });
@@ -273,11 +317,9 @@ export class WorkflowEngine {
   }
 
   async reject(taskId: number, userId: number, userRole: string, comment?: string, input: RejectTaskInput = {}): Promise<WorkflowActionResult> {
-    if (!["OPERATION_MANAGER", "OWNER", "SUPER_ADMIN"].includes(userRole)) {
-      throw new ForbiddenException("只有运营主管可以驳回");
-    }
     if (!comment?.trim()) throw new BadRequestException("请填写退回原因");
     const task = await this.getTask(taskId);
+    await this.assertOperationsApprovalAccess(task, userId, userRole, "驳回");
     if (!StateMachine.canTransition(task.workflowStatus, TASK_WORKFLOW_STATUS.OPS_REJECTED, "task")) {
       throw new BadRequestException(`非法状态转换: ${task.workflowStatus} -> ${TASK_WORKFLOW_STATUS.OPS_REJECTED}`);
     }
@@ -314,7 +356,7 @@ export class WorkflowEngine {
           action: "ops_approval_rejected",
           operatorId: userId,
           correlationId: `task_${taskId}`,
-          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, issueImageTaskIds, issueTypes: input.issueTypes || [], reason: comment.trim(), processedAt, legacySubmissionRecovered: legacyRecovered }),
+          metadata: JSON.stringify({ approvalRecordId: approvalRecord.id, issueImageTaskIds, issueTypes: input.issueTypes || [], reason: comment.trim(), processedAt, legacySubmissionRecovered: legacyRecovered, operationGroupSnapshotId: task.operationGroupSnapshotId ?? null, actualApproverId: userId, action: "OPS_REJECTED" }),
         },
       });
       return tx.task.findUnique({ where: { id: taskId } });
@@ -327,14 +369,12 @@ export class WorkflowEngine {
   }
 
   async rollbackApproval(taskId: number, userId: number, userRole: string): Promise<WorkflowActionResult> {
-    if (!["OPERATION_MANAGER", "OWNER", "SUPER_ADMIN"].includes(userRole)) {
-      throw new ForbiddenException("当前账号无权限回退审批");
-    }
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       include: { imageTasks: { select: { id: true, status: true, designerId: true } } },
     });
     if (!task) throw new NotFoundException("法旨不存在");
+    await this.assertOperationsApprovalAccess(task, userId, userRole, "回退审批");
     if (task.workflowStatus !== TASK_WORKFLOW_STATUS.OPS_APPROVED) {
       throw new ForbiddenException("当前法旨已进入后续流程，不能在列表中回退审批，请进入详情页处理。");
     }
@@ -416,5 +456,16 @@ export class WorkflowEngine {
 
   private async recordLog(userId: number, action: string, targetType: string, targetId: number, content?: string) {
     return this.logService.log({ userId, action, targetType, targetId, content });
+  }
+
+  private async assertOperationsApprovalAccess(task: any, userId: number, userRole: string, action: string) {
+    if (["OPERATION_MANAGER", "OWNER", "SUPER_ADMIN"].includes(userRole)) return;
+    if (userRole !== "OPERATION" || !task.operationGroupSnapshotId) {
+      throw new ForbiddenException(`当前账号无权${action}该法旨`);
+    }
+    const leader = await this.organization.getActiveGroupLeader(task.operationGroupSnapshotId);
+    if (!leader || leader.userId !== userId) {
+      throw new ForbiddenException(`当前账号不是该运营组的有效组长，无法${action}该法旨`);
+    }
   }
 }

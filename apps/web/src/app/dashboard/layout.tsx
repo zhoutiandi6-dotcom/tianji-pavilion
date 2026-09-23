@@ -22,7 +22,7 @@ import { displayUserName } from "@/lib/display";
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
-const getMenuItems = (role: string) => {
+const getMenuItems = (role: string, organizationIdentity?: string | null) => {
   const common = [
     { key: "/dashboard", icon: <HomeOutlined />, label: "首页" },
   ];
@@ -34,6 +34,7 @@ const getMenuItems = (role: string) => {
       ...common,
       { key: "/dashboard/fazhi?view=all", icon: <FileTextOutlined />, label: "我的法旨" },
       { key: "/dashboard/fazhi/new", icon: <FileTextOutlined />, label: "新建法旨" },
+      ...(organizationIdentity === "GROUP_LEADER" ? [{ key: "/dashboard/operations-organization", icon: <TeamOutlined />, label: "本组成员" }] : []),
       { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈中心" },
       notifications,
     ];
@@ -45,6 +46,7 @@ const getMenuItems = (role: string) => {
       fazhiCenter,
       { key: "/dashboard/fazhi?scope=ops-approvals", icon: <FileTextOutlined />, label: "待我审批" },
       { key: "/dashboard/weekly-operations-approval-plans", icon: <FileTextOutlined />, label: "本周审批计划" },
+      { key: "/dashboard/operations-organization", icon: <TeamOutlined />, label: "运营组织" },
       { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈中心" },
       notifications,
     ];
@@ -79,6 +81,7 @@ const getMenuItems = (role: string) => {
       { key: "/dashboard/stores", icon: <ShopOutlined />, label: "店铺管理" },
       { key: "/dashboard/requirement-types", icon: <TagsOutlined />, label: "需求类型" },
       { key: "/dashboard/users", icon: <TeamOutlined />, label: "用户管理" },
+      { key: "/dashboard/operations-organization", icon: <TeamOutlined />, label: "运营组织管理" },
       { key: "/dashboard/logs", icon: <SettingOutlined />, label: "操作日志" },
       notifications,
       { key: "/dashboard/feedback", icon: <MessageOutlined />, label: "反馈管理" },
@@ -120,7 +123,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     if (!token) { router.replace("/login"); return; }
     authApi.getMe().then((res) => {
       const d = res.data.data || res.data;
-      setUser({ displayName: d.displayName, username: d.username, role: d.role });
+      setUser({ displayName: d.displayName, username: d.username, role: d.role, organizationIdentity: d.organizationIdentity });
     }).catch(() => { localStorage.removeItem("accessToken"); router.replace("/login"); })
     .finally(() => setLoading(false));
     loadNotifs();
@@ -188,7 +191,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={220}
           style={{ position: "fixed", left: 0, top: 64, bottom: 0, overflow: "auto", background: "#fff", borderRight: "1px solid #f0f0f0" }}>
           <Menu mode="inline" selectedKeys={[selectedKey]}
-            items={getMenuItems(user?.role || "")}
+            items={getMenuItems(user?.role || "", user?.organizationIdentity)}
             onClick={({ key }) => router.push(key)}
             style={{ border: "none", marginTop: 8 }} />
         </Sider>

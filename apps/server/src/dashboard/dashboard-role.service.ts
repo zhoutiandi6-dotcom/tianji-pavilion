@@ -327,7 +327,8 @@ export class DashboardRoleService {
   private async operator(userId: number) {
     const today = getShanghaiDayRange();
     const currentWeek = getShanghaiWeekRange();
-    const taskWhere = { creatorId: userId, deletedAt: null };
+    const subject = await this.visibility.subjectForUser("OPERATION", userId);
+    const taskWhere = this.visibility.buildTaskVisibilityWhere(subject);
     const tasks = await this.prisma.task.findMany({
       where: taskWhere,
       include: {

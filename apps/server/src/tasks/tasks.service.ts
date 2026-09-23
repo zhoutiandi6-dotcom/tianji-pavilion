@@ -54,7 +54,8 @@ export class TasksService {
     const scope = userRole === "OPERATION" && operatorViewScopes[requestedView]
       ? operatorViewScopes[requestedView]
       : String(filters.scope || (filters.view === "archive" ? "archived" : "processing"));
-    conditions.push(this.visibility.scopeWhere(scope, userRole, userId));
+    const subject = await this.visibility.subjectForUser(userRole, userId);
+    conditions.push(this.visibility.scopeWhere(scope, userRole, userId, subject));
     if (filters.createdRange === "thisWeek") {
       const week = getShanghaiWeekRange();
       conditions.push({ createdAt: { gte: week.start, lt: week.end } });
@@ -110,7 +111,7 @@ export class TasksService {
       listImageTasks.where = { designerId: userId };
     }
     const canReadDrafts = userRole === "OPERATION" || ADMIN_ROLES.includes(userRole || "");
-    const draftWhere = canReadDrafts ? this.visibility.scopeWhere("drafts", userRole, userId) : undefined;
+    const draftWhere = canReadDrafts ? this.visibility.scopeWhere("drafts", userRole, userId, subject) : undefined;
     const usesImageMetric = Boolean(filters.imageStatus || imageGroupStatuses) || ["design-assignment", "design-reviews", "design-tasks"].includes(scope);
     const imageMetricBaseWhere = usesImageMetric
       ? this.visibility.imageTaskMetricWhere(
@@ -127,11 +128,11 @@ export class TasksService {
       : undefined;
     const operatorScopeCounts = userRole === "OPERATION"
       ? {
-          all: this.prisma.task.count({ where: this.visibility.scopeWhere("all", userRole, userId) }),
-          drafts: this.prisma.task.count({ where: this.visibility.scopeWhere("drafts", userRole, userId) }),
-          returnedForSupplement: this.prisma.task.count({ where: this.visibility.scopeWhere("returned-for-supplement", userRole, userId) }),
-          processing: this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId) }),
-          designCompleted: this.prisma.task.count({ where: this.visibility.scopeWhere("design-completed", userRole, userId) }),
+          all: this.prisma.task.count({ where: this.visibility.scopeWhere("all", userRole, userId, subject) }),
+          drafts: this.prisma.task.count({ where: this.visibility.scopeWhere("drafts", userRole, userId, subject) }),
+          returnedForSupplement: this.prisma.task.count({ where: this.visibility.scopeWhere("returned-for-supplement", userRole, userId, subject) }),
+          processing: this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId, subject) }),
+          designCompleted: this.prisma.task.count({ where: this.visibility.scopeWhere("design-completed", userRole, userId, subject) }),
         }
       : undefined;
     const [items, total, processingCount, draftCount, archivedCount, imageMetricTotal] = await Promise.all([
@@ -153,9 +154,9 @@ export class TasksService {
         take: pageSize,
       }),
       this.prisma.task.count({ where }),
-      this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId) }),
+      this.prisma.task.count({ where: this.visibility.scopeWhere("processing", userRole, userId, subject) }),
       draftWhere ? this.prisma.task.count({ where: draftWhere }) : Promise.resolve(0),
-      this.prisma.task.count({ where: this.visibility.scopeWhere("archived", userRole, userId) }),
+      this.prisma.task.count({ where: this.visibility.scopeWhere("archived", userRole, userId, subject) }),
       imageMetricWhere ? this.prisma.imageTask.count({ where: imageMetricWhere }) : Promise.resolve(0),
     ]);
     return {
@@ -170,13 +171,13 @@ export class TasksService {
     };
   }
 
-  async findOpsApprovalQueue(page = 1, pageSize = 20, userRole?: string, filters: any = {}) {
-    if (userRole !== "OPERATION_MANAGER" && !ADMIN_ROLES.includes(userRole || "")) {
-      throw new ForbiddenException("当前账号无权访问待运营主管审批列表");
-    }
+  async findOpsApprovalQueue(page = 1, pageSize = 20, userRole?: string, userId?: number, filters: any = {}) {
+    const subject = await this.visibility.subjectForUser(userRole, userId);
+    const isLeader = this.visibility.resolveDataScope(subject).type === "GROUP";
+    if (userRole !== "OPERATION_MANAGER" && !ADMIN_ROLES.includes(userRole || "") && !isLeader) throw new ForbiddenException("当前账号无权访问待运营审批列表");
 
     const tasks = await this.prisma.task.findMany({
-      where: { deletedAt: null, workflowStatus: "SUBMITTED" },
+      where: { AND: [this.visibility.buildTaskVisibilityWhere(subject), { workflowStatus: "SUBMITTED" }] },
       include: {
         creator: { select: { id: true, username: true, displayName: true } },
         store: { select: { id: true, name: true } },
@@ -290,8 +291,9 @@ export class TasksService {
       imageTaskInclude.where = { designerId: userId };
     }
 
+    const subject = await this.visibility.subjectForUser(userRole, userId);
     const task = await this.prisma.task.findFirst({
-      where: { AND: [{ id, deletedAt: null }, this.visibility.visibleWhere(userRole, userId)] },
+      where: { AND: [{ id, deletedAt: null }, this.visibility.buildTaskVisibilityWhere(subject)] },
       include: {
         creator: { select: { id: true, username: true, displayName: true } },
         store: { select: { id: true, name: true } },
@@ -355,17 +357,10 @@ export class TasksService {
     return { ...task, auditEvents, imageReviewRejections };
   }
 
-  private canView(task: any, userRole?: string, userId?: number) {
-    return this.visibility.canAccessTask({ role: userRole, userId }, task);
-  }
-
   private canBatchPriority(task: any, userRole?: string, userId?: number) {
     if (ADMIN_ROLES.includes(userRole || "")) return true;
     if (userRole === "OPERATION") {
       return task.creatorId === userId && task.workflowStatus === "DRAFT";
-    }
-    if (userRole === "OPERATION_MANAGER" || userRole === "DESIGN_MANAGER") {
-      return this.canView(task, userRole, userId);
     }
     return false;
   }
@@ -411,10 +406,16 @@ export class TasksService {
     if (!["OPERATION", ...ADMIN_ROLES].includes(userRole)) {
       throw new ForbiddenException("当前账号无权限访问该页面。");
     }
+    // Defense in depth: DTO validation rejects unknown HTTP fields, while this
+    // protects direct/internal callers from forging server-owned snapshots.
+    const safeDto: any = { ...dto };
+    delete safeDto.operationGroupSnapshotId;
+    delete safeDto.operationMembershipSnapshotId;
+    delete safeDto.operationSnapshotAt;
     const serialNumber = await this.genSerial();
-    const requestedImageTasks = Array.isArray(dto.imageTasks) ? dto.imageTasks.slice(0, 200) : [];
-    const imageCount = Math.max(1, Math.min(Number(dto.imageCount || requestedImageTasks.length || 1), 200));
-    const priority = dto.urgent ? "URGENT" : (dto.priority || "NORMAL");
+    const requestedImageTasks = Array.isArray(safeDto.imageTasks) ? safeDto.imageTasks.slice(0, 200) : [];
+    const imageCount = Math.max(1, Math.min(Number(safeDto.imageCount || requestedImageTasks.length || 1), 200));
+    const priority = safeDto.urgent ? "URGENT" : (safeDto.priority || "NORMAL");
 
     const task = await this.prisma.$transaction(async (tx: any) => {
       const created = await tx.task.create({
@@ -422,23 +423,23 @@ export class TasksService {
           serialNumber,
           priority,
           workflowStatus: "DRAFT",
-          productCode: dto.productCode,
-          productName: dto.productName,
-          storeId: dto.storeId,
-          requirementTypeId: dto.requirementTypeId,
-          compatibleProduct: dto.compatibleProduct ?? dto.productName,
-          requesterName: dto.requesterName,
-          operatorOwner: dto.operatorOwner,
-          submittedAt: dto.submittedAt ? new Date(dto.submittedAt) : null,
-          deadline: dto.deadline ? new Date(dto.deadline) : null,
+          productCode: safeDto.productCode,
+          productName: safeDto.productName,
+          storeId: safeDto.storeId,
+          requirementTypeId: safeDto.requirementTypeId,
+          compatibleProduct: safeDto.compatibleProduct ?? safeDto.productName,
+          requesterName: safeDto.requesterName,
+          operatorOwner: safeDto.operatorOwner,
+          submittedAt: safeDto.submittedAt ? new Date(safeDto.submittedAt) : null,
+          deadline: safeDto.deadline ? new Date(safeDto.deadline) : null,
           imageCount,
-          imageSize: dto.imageSize,
-          usagePosition: dto.usagePosition,
-          taskType: dto.taskType,
-          overallRequirementType: dto.overallRequirementType,
-          unifiedModificationNote: dto.unifiedModificationNote,
-          outputSpec: dto.outputSpec,
-          materialLinks: dto.materialLinks,
+          imageSize: safeDto.imageSize,
+          usagePosition: safeDto.usagePosition,
+          taskType: safeDto.taskType,
+          overallRequirementType: safeDto.overallRequirementType,
+          unifiedModificationNote: safeDto.unifiedModificationNote,
+          outputSpec: safeDto.outputSpec,
+          materialLinks: safeDto.materialLinks,
           creatorId: userId,
         },
       });
@@ -471,13 +472,21 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException("法旨不存在");
 
-    if (["DESIGNER", "DESIGN_MANAGER"].includes(userRole)) throw new ForbiddenException("无权编辑法旨主单");
-    if (userRole === "OPERATION" && task.creatorId !== userId) throw new ForbiddenException("只能编辑自己的法旨");
+    const subject = this.visibility.subjectForUser
+      ? await this.visibility.subjectForUser(userRole, userId)
+      : { role: userRole, userId };
+    const canEdit = this.visibility.canEditTask
+      ? this.visibility.canEditTask(subject, task)
+      : userRole === "OPERATION" && task.creatorId === userId;
+    if (!canEdit) throw new ForbiddenException(userRole === "OPERATION" ? "只能编辑自己的法旨" : "当前账号无权编辑该法旨主单");
     if (userRole === "OPERATION" && !EDITABLE_BY_OPERATOR.includes(task.workflowStatus)) {
       throw new ForbiddenException("提交审批后不可编辑，请先撤回或等待主管退回");
     }
 
     const data: any = { ...dto };
+    delete data.operationGroupSnapshotId;
+    delete data.operationMembershipSnapshotId;
+    delete data.operationSnapshotAt;
     // Keep legacy productName clients compatible with the canonical approval field.
     if (dto.compatibleProduct === undefined && dto.productName !== undefined) {
       data.compatibleProduct = dto.productName;

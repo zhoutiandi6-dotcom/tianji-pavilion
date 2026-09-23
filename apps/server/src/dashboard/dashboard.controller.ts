@@ -77,11 +77,12 @@ export class DashboardController {
   async getOverview(@Request() req: any) {
     const userId = Number(req.user.sub);
     const role = String(req.user.role || "");
-    const taskWhere = this.visibility.visibleWhere(role, userId);
+    const subject = await this.visibility.subjectForUser(role, userId);
+    const taskWhere = this.visibility.buildTaskVisibilityWhere(subject);
 
     const [cards, todo, recent, flowCounts, recentActivities, weeklyPlan] = await Promise.all([
-      this.getCards(role, userId, taskWhere),
-      this.getTodoItems(role, userId),
+      this.getCards(role, userId, taskWhere, subject),
+      this.getTodoItems(role, userId, subject),
       this.getRecentTasks(role, userId, taskWhere),
       this.getFlowCounts(role, taskWhere),
       this.getRecentActivities(role, userId, taskWhere),
@@ -105,7 +106,7 @@ export class DashboardController {
     };
   }
 
-  private async getCards(role: string, userId: number, taskWhere: any) {
+  private async getCards(role: string, userId: number, taskWhere: any, subject?: any) {
     if (ADMIN_ROLES.includes(role)) {
       return [
         await this.taskCard("处理中", this.visibility.scopeWhere("processing", role, userId), "/dashboard/fazhi?scope=processing"),
@@ -117,6 +118,14 @@ export class DashboardController {
       ];
     }
     if (role === "OPERATION") {
+      if (this.visibility.resolveDataScope(subject || { role, userId }).type === "GROUP") {
+        return [
+          await this.taskCard("本组草稿", { AND: [taskWhere, { workflowStatus: "DRAFT" }] }),
+          await this.taskCard("本组待审批", { AND: [taskWhere, { workflowStatus: "SUBMITTED" }] }),
+          await this.taskCard("本组被退回", { AND: [taskWhere, { workflowStatus: "OPS_REJECTED" }] }),
+          await this.taskCard("本组设计流程", { AND: [taskWhere, { workflowStatus: { in: DESIGN_VISIBLE_STATUSES } }] }, "/dashboard/fazhi?scope=design-flow-history&statusGroup=designflow"),
+        ];
+      }
       return [
         await this.taskCard("我的草稿", { creatorId: userId, workflowStatus: "DRAFT" }),
         await this.taskCard("被主管退回", { creatorId: userId, workflowStatus: "OPS_REJECTED" }),
@@ -205,13 +214,13 @@ export class DashboardController {
     };
   }
 
-  private async getTodoItems(role: string, userId: number) {
+  private async getTodoItems(role: string, userId: number, subject?: any) {
     if (role === "DESIGNER") {
       const where = {
         designerId: userId,
         deletedAt: null,
         status: { in: ["NOT_STARTED", "IN_PROGRESS", "REVISION_REQUIRED"] },
-        task: this.visibility.visibleWhere(role, userId),
+        task: subject ? this.visibility.buildTaskVisibilityWhere(subject) : this.visibility.visibleWhere(role, userId),
       };
       const [items, total] = await Promise.all([
         this.prisma.imageTask.findMany({
@@ -235,7 +244,7 @@ export class DashboardController {
       };
     }
 
-    const where = this.todoTaskWhere(role, userId);
+    const where = this.todoTaskWhere(role, userId, subject);
     const [tasks, total] = await Promise.all([
       this.prisma.task.findMany({
         where,
@@ -261,8 +270,8 @@ export class DashboardController {
     };
   }
 
-  private todoTaskWhere(role: string, userId: number) {
-    const visible = this.visibility.visibleWhere(role, userId);
+  private todoTaskWhere(role: string, userId: number, subject?: any) {
+    const visible = subject ? this.visibility.buildTaskVisibilityWhere(subject) : this.visibility.visibleWhere(role, userId);
     if (ADMIN_ROLES.includes(role)) {
       return { AND: [visible, { workflowStatus: { in: ["SUBMITTED", "OPS_APPROVED", "DESIGN_REVIEW"] } }] };
     }

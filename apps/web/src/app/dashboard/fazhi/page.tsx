@@ -394,7 +394,7 @@ export default function FazhiListPage() {
     .filter(([value]) => isDraftScope ? value === "DRAFT" : isArchivedScope ? ARCHIVE_STATUSES.includes(value) : value !== "DRAFT" && !ARCHIVE_STATUSES.includes(value))
     .map(([value, label]) => ({ value, label }));
 
-  if (role === "OPERATION") return <OperatorDecreeList />;
+  if (role === "OPERATION") return <OperatorDecreeList organizationIdentity={currentUser?.organizationIdentity} />;
 
   if (isOpsApprovalScope) {
     const queueItems = data.items || [];

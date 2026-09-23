@@ -3,6 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import { AuthService } from "../auth.service";
 import { PrismaService } from "../../common/prisma.service";
 import { OperationLogService } from "../../operation-log/operation-log.service";
+import { OperationsOrganizationService } from "../../operations-organization/operations-organization.service";
 
 describe("AuthService", () => {
   let service: AuthService;
@@ -19,7 +20,7 @@ describe("AuthService", () => {
     mustChangePassword: false,
     loginAttempts: 0,
     lockedUntil: null,
-    role: { id: 1, name: "OWNER" },
+    role: { id: 1, name: "OWNER", rolePermissions: [] },
     createdAt: new Date(),
     roleId: 1,
   };
@@ -47,6 +48,7 @@ describe("AuthService", () => {
         { provide: PrismaService, useValue: prisma },
         { provide: JwtService, useValue: jwtService },
         { provide: OperationLogService, useValue: { log: jest.fn() } },
+        { provide: OperationsOrganizationService, useValue: { getActiveMembership: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
 
@@ -112,6 +114,37 @@ describe("AuthService", () => {
       prisma.user.findFirst.mockResolvedValue(null);
       const result = await service.isInitialized();
       expect(result.initialized).toBe(false);
+    });
+  });
+
+  describe("getCurrentUser organization identity", () => {
+    it("reports the group-leader identity from an active membership without changing the role", async () => {
+      const organization = (service as any).organization;
+      prisma.user.findUnique.mockResolvedValue({
+        ...mockUser,
+        role: { id: 2, name: "OPERATION", rolePermissions: [] },
+      });
+      organization.getActiveMembership.mockResolvedValue({ memberRole: "GROUP_LEADER", groupId: 1 });
+
+      await expect(service.getCurrentUser(1)).resolves.toEqual(expect.objectContaining({
+        role: "OPERATION",
+        organizationIdentity: "GROUP_LEADER",
+      }));
+      expect(organization.getActiveMembership).toHaveBeenCalledWith(1);
+    });
+
+    it("keeps an ordinary operation member as the ordinary presentation identity", async () => {
+      const organization = (service as any).organization;
+      prisma.user.findUnique.mockResolvedValue({
+        ...mockUser,
+        role: { id: 2, name: "OPERATION", rolePermissions: [] },
+      });
+      organization.getActiveMembership.mockResolvedValue({ memberRole: "MEMBER", groupId: 1 });
+
+      await expect(service.getCurrentUser(1)).resolves.toEqual(expect.objectContaining({
+        role: "OPERATION",
+        organizationIdentity: null,
+      }));
     });
   });
 });

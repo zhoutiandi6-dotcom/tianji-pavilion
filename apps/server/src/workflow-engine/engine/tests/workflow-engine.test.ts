@@ -3,17 +3,20 @@ import { WorkflowEngine } from "../index";
 import { PrismaService } from "../../../common/prisma.service";
 import { EventBus } from "../../../event-bus/event-bus";
 import { OperationLogService } from "../../../operation-log/operation-log.service";
+import { OperationsOrganizationService } from "../../../operations-organization/operations-organization.service";
 
 describe("WorkflowEngine", () => {
   let engine: WorkflowEngine;
   let prisma: any;
   let eventBus: any;
+  let organization: any;
 
   const mockTask = {
     id: 1,
     workflowStatus: "DRAFT",
     serialNumber: "天字第000001号法旨",
     creatorId: 1,
+    creator: { role: { name: "OPERATION" } },
     storeId: 1,
     requesterName: "运营人员",
     compatibleProduct: "测试产品",
@@ -64,6 +67,7 @@ describe("WorkflowEngine", () => {
     eventBus = {
       publish: jest.fn().mockResolvedValue(undefined),
     };
+    organization = { getMembershipAtInTransaction: jest.fn().mockResolvedValue(null), getActiveGroupLeader: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -71,6 +75,7 @@ describe("WorkflowEngine", () => {
         { provide: PrismaService, useValue: prisma },
         { provide: EventBus, useValue: eventBus },
         { provide: OperationLogService, useValue: { log: jest.fn() } },
+        { provide: OperationsOrganizationService, useValue: organization },
       ],
     }).compile();
 
@@ -91,6 +96,80 @@ describe("WorkflowEngine", () => {
         }),
       });
       expect(eventBus.publish).toHaveBeenCalledWith("workflow.submitted", expect.any(Object));
+    });
+
+    it("freezes the creator membership and writes one audit event on the first submission", async () => {
+      organization.getMembershipAtInTransaction.mockResolvedValue({ id: 22, groupId: 8 });
+
+      await engine.submit(1, 1, "OPERATION");
+
+      expect(organization.getMembershipAtInTransaction).toHaveBeenCalledWith(prisma, 1, expect.any(Date));
+      expect(prisma.task.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ workflowStatus: "DRAFT", operationSnapshotAt: null }),
+        data: expect.objectContaining({ operationGroupSnapshotId: 8, operationMembershipSnapshotId: 22, operationSnapshotAt: expect.any(Date) }),
+      }));
+      expect(prisma.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ action: "task.organization_snapshot_frozen", metadata: expect.stringContaining('"membershipId":22') }),
+      }));
+    });
+
+    it("keeps compatibility mode legacy-unscoped when the creator has no membership", async () => {
+      await engine.submit(1, 1, "OPERATION");
+
+      expect(prisma.task.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.not.objectContaining({ operationGroupSnapshotId: expect.anything() }),
+      }));
+      expect(prisma.auditEvent.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects a first submission without a membership in strict mode", async () => {
+      const previous = process.env.ORG_PERMISSION_ENFORCEMENT;
+      process.env.ORG_PERMISSION_ENFORCEMENT = "strict";
+      try {
+        await expect(engine.submit(1, 1, "OPERATION")).rejects.toThrow("当前运营尚未加入有效运营组，请联系管理员处理后再提交。");
+        expect(prisma.task.updateMany).not.toHaveBeenCalled();
+        expect(prisma.taskSubmissionRecord.create).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.ORG_PERMISSION_ENFORCEMENT;
+        else process.env.ORG_PERMISSION_ENFORCEMENT = previous;
+      }
+    });
+
+    it("never recalculates a frozen snapshot on resubmission", async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        ...mockTask,
+        workflowStatus: "OPS_REJECTED",
+        operationGroupSnapshotId: 8,
+        operationMembershipSnapshotId: 22,
+        operationSnapshotAt: new Date("2026-09-22T00:00:00.000Z"),
+      });
+      organization.getMembershipAtInTransaction.mockResolvedValue({ id: 23, groupId: 9 });
+
+      await engine.submit(1, 1, "OPERATION");
+
+      expect(organization.getMembershipAtInTransaction).not.toHaveBeenCalled();
+      expect(prisma.task.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.not.objectContaining({ operationGroupSnapshotId: expect.anything() }),
+      }));
+      expect(prisma.auditEvent.create).not.toHaveBeenCalled();
+    });
+
+    it("permits only one concurrent first submit to freeze a snapshot", async () => {
+      organization.getMembershipAtInTransaction.mockResolvedValue({ id: 22, groupId: 8 });
+      let status = "DRAFT";
+      prisma.task.updateMany.mockImplementation(({ where, data }: any) => {
+        if (where.workflowStatus !== status) return { count: 0 };
+        status = data.workflowStatus;
+        return { count: 1 };
+      });
+
+      const results = await Promise.allSettled([
+        engine.submit(1, 1, "OPERATION"),
+        engine.submit(1, 1, "OPERATION"),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(prisma.auditEvent.create).toHaveBeenCalledTimes(1);
     });
 
     it("creates RESUBMIT records with the next sequence", async () => {
@@ -124,6 +203,14 @@ describe("WorkflowEngine", () => {
       expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
+    it("does not publish an event when snapshot audit persistence fails inside the submit transaction", async () => {
+      organization.getMembershipAtInTransaction.mockResolvedValue({ id: 22, groupId: 8 });
+      prisma.auditEvent.create.mockRejectedValue(new Error("snapshot audit failed"));
+      await expect(engine.submit(1, 1, "OPERATION")).rejects.toThrow("snapshot audit failed");
+      expect(eventBus.publish).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
     it("rejects DESIGNER from submitting", async () => {
       await expect(engine.submit(1, 1, "DESIGNER")).rejects.toThrow();
     });
@@ -152,6 +239,22 @@ describe("WorkflowEngine", () => {
 
     it("rejects OPERATION from approving", async () => {
       await expect(engine.approve(1, 1, "OPERATION")).rejects.toThrow();
+    });
+
+    it("allows the current snapshot-group leader to approve another member and their own task", async () => {
+      organization.getActiveGroupLeader.mockResolvedValue({ userId: 9 });
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED", creatorId: 7, operationGroupSnapshotId: 3 });
+      await expect(engine.approve(1, 9, "OPERATION")).resolves.toMatchObject({ task: expect.anything() });
+
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED", creatorId: 9, operationGroupSnapshotId: 3 });
+      await expect(engine.approve(1, 9, "OPERATION")).resolves.toMatchObject({ task: expect.anything() });
+    });
+
+    it("rejects a leader from a different snapshot group while keeping manager global intervention", async () => {
+      organization.getActiveGroupLeader.mockResolvedValue({ userId: 10 });
+      prisma.task.findUnique.mockResolvedValue({ ...mockTask, workflowStatus: "SUBMITTED", operationGroupSnapshotId: 3 });
+      await expect(engine.approve(1, 9, "OPERATION")).rejects.toThrow("不是该运营组的有效组长");
+      await expect(engine.approve(1, 99, "OPERATION_MANAGER")).resolves.toMatchObject({ task: expect.anything() });
     });
 
     it("rejects DESIGNER from approving", async () => {

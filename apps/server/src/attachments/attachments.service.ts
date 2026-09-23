@@ -4,6 +4,7 @@ import { existsSync, statSync } from "fs";
 import { extname, join } from "path";
 import { PrismaService } from "../common/prisma.service";
 import { OperationLogService } from "../operation-log/operation-log.service";
+import { TaskVisibilityService } from "../common/task-visibility.service";
 import { getTianjiDataPaths, resolveAttachmentStoragePath, toAttachmentStoragePath } from "../common/tianji-data-paths";
 import { emptyAnnotationDocument, validateAnnotationSave } from "./annotation-document";
 
@@ -20,7 +21,7 @@ export class AttachmentsService {
   private readonly dataPaths = getTianjiDataPaths();
   private readonly uploadRoot = this.dataPaths.attachmentsRoot;
 
-  constructor(private prisma: PrismaService, private log: OperationLogService) {}
+  constructor(private prisma: PrismaService, private log: OperationLogService, private visibility: TaskVisibilityService = new TaskVisibilityService()) {}
 
   private async annotationAttachment(client: any, id: number, userId: number, userRole: string, write = false) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new BadRequestException("Invalid attachment ID");
@@ -29,7 +30,7 @@ export class AttachmentsService {
       include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } } },
     });
     if (!attachment || attachment.deletedAt || attachment.imageTask?.deletedAt || attachment.imageTask?.task?.deletedAt || attachment.task?.deletedAt) throw new NotFoundException("Attachment not found");
-    if (!this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to view attachment");
+    if (!await this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to view attachment");
     if (!attachment.imageTaskId || !attachment.imageTask || !IMAGE_CATEGORIES.includes(attachment.category)
       || !(attachment.mimeType?.startsWith("image/") || /\.(jpg|jpeg|png|webp|gif)$/i.test(attachment.fileName))) throw new BadRequestException("A real image-task attachment is required");
     try {
@@ -90,7 +91,7 @@ export class AttachmentsService {
   async findByTask(taskId: number, userId: number, userRole: string) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { imageTasks: true } });
     if (!task) throw new NotFoundException("Task not found");
-    if (!this.canViewTask(task, userId, userRole)) throw new ForbiddenException("No permission to view attachments");
+    if (!await this.canViewTask(task, userId, userRole)) throw new ForbiddenException("No permission to view attachments");
     if (userRole === "DESIGNER") return [];
     return this.prisma.attachment.findMany({
       where: { taskId, imageTaskId: null, deletedAt: null },
@@ -104,7 +105,7 @@ export class AttachmentsService {
       include: { task: { include: { imageTasks: true } } },
     });
     if (!imageTask) throw new NotFoundException("Image task not found");
-    if (!this.canViewImageTask(imageTask, userId, userRole)) throw new ForbiddenException("No permission to view attachments");
+    if (!await this.canViewImageTask(imageTask, userId, userRole)) throw new ForbiddenException("No permission to view attachments");
     return this.prisma.attachment.findMany({ where: { imageTaskId, deletedAt: null }, orderBy: { uploadedAt: "desc" } });
   }
 
@@ -236,7 +237,7 @@ export class AttachmentsService {
       include: { task: { include: { imageTasks: true } }, imageTask: { include: { task: { include: { imageTasks: true } } } }, feedback: true },
     });
     if (!attachment || attachment.deletedAt) throw new NotFoundException("Attachment not found");
-    if (!this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to download attachment");
+    if (!await this.canViewAttachment(attachment, userId, userRole)) throw new ForbiddenException("No permission to download attachment");
     let filePath: string;
     try {
       filePath = resolveAttachmentStoragePath(attachment.storagePath, this.dataPaths);
@@ -283,25 +284,18 @@ export class AttachmentsService {
     await this.log.log({ userId, action: "delete_attachment", targetType: "attachment", targetId: id, content: "Delete attachment" });
   }
 
-  private canViewTask(task: any, userId: number, userRole: string) {
-    if (ADMIN_ROLES.includes(userRole)) return true;
-    if (userRole === "OPERATION") return task.creatorId === userId;
-    if (userRole === "OPERATION_MANAGER") return task.workflowStatus !== "DRAFT";
-    if (userRole === "DESIGN_MANAGER") return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus);
-    if (userRole === "DESIGNER") {
-      return DESIGN_VISIBLE_TASK_STATUS.includes(task.workflowStatus) && task.imageTasks?.some((it: any) => it.designerId === userId);
-    }
-    return false;
+  private async canViewTask(task: any, userId: number, userRole: string) {
+    return this.visibility.canAccessTask(await this.visibility.subjectForUser(userRole, userId), task);
   }
 
-  private canViewImageTask(imageTask: any, userId: number, userRole: string) {
-    if (!this.canViewTask(imageTask.task, userId, userRole)) return false;
+  private async canViewImageTask(imageTask: any, userId: number, userRole: string) {
+    if (!await this.canViewTask(imageTask.task, userId, userRole)) return false;
     if (userRole === "DESIGNER") return imageTask.designerId === userId;
     return true;
   }
 
-  private canViewAttachment(attachment: any, userId: number, userRole: string) {
-    if (attachment.taskId) return this.canViewTask(attachment.task, userId, userRole) && userRole !== "DESIGNER";
+  private async canViewAttachment(attachment: any, userId: number, userRole: string) {
+    if (attachment.taskId) return await this.canViewTask(attachment.task, userId, userRole) && userRole !== "DESIGNER";
     if (attachment.imageTaskId) return this.canViewImageTask(attachment.imageTask, userId, userRole);
     if (attachment.feedbackId) return FEEDBACK_ROLES.includes(userRole);
     return false;

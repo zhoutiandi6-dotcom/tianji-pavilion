@@ -3,6 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
 import { PrismaService } from "../common/prisma.service";
 import { OperationLogService } from "../operation-log/operation-log.service";
+import { OperationsOrganizationService } from "../operations-organization/operations-organization.service";
 
 @Injectable()
 export class AuthService {
@@ -10,6 +11,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private logService: OperationLogService,
+    private readonly organization: OperationsOrganizationService,
   ) {}
 
   async login(username: string, password: string, ipAddress?: string) {
@@ -106,6 +108,14 @@ export class AuthService {
 
     if (!user) throw new UnauthorizedException("用户不存在");
 
+    // Presentation identity is derived from the active membership; it is not a Role.
+    const activeMembership = user.role.name === "OPERATION"
+      ? await this.organization.getActiveMembership(userId)
+      : null;
+    const organizationIdentity = activeMembership?.memberRole === "GROUP_LEADER"
+      ? "GROUP_LEADER"
+      : null;
+
     return {
       id: user.id,
       username: user.username,
@@ -114,6 +124,7 @@ export class AuthService {
       role: user.role.name,
       isActive: user.isActive,
       mustChangePassword: user.mustChangePassword,
+      organizationIdentity,
       createdAt: user.createdAt.toISOString(),
       permissions: user.role.rolePermissions.map((rp: any) => ({
         action: rp.permission.action,

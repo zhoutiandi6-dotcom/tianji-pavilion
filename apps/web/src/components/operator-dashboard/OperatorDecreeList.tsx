@@ -55,7 +55,7 @@ function emptyText(view: string) {
   return '暂无符合当前筛选条件的法旨';
 }
 
-export default function OperatorDecreeList() {
+export default function OperatorDecreeList({ organizationIdentity }: { organizationIdentity?: string | null }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
@@ -232,7 +232,7 @@ export default function OperatorDecreeList() {
       breadcrumb={<span>工作台 / 法旨</span>}
       title="我的法旨"
       subtitle="跟进我提交的法旨与设计进度。"
-      meta={<span>当前角色：普通运营</span>}
+      meta={<span>当前身份：{organizationIdentity === "GROUP_LEADER" ? "运营组长" : "普通运营"}</span>}
       primaryAction={{ key: 'create', label: '新建法旨', icon: <PlusOutlined />, onClick: () => router.push('/dashboard/fazhi/new') }}
     />
     <FilterCard>

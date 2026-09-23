@@ -1,5 +1,6 @@
-import { ForbiddenException, Injectable } from "@nestjs/common";
+import { ForbiddenException, Injectable, Optional } from "@nestjs/common";
 import { getShanghaiWeekRange } from "./shanghai-time";
+import { OperationsOrganizationService } from "../operations-organization/operations-organization.service";
 
 /**
  * ORG-PERM-001 authorization contract.
@@ -78,6 +79,18 @@ export function currentOperationsApprovalPlanMembershipWhere(at = new Date()) {
 
 @Injectable()
 export class TaskVisibilityService {
+  constructor(@Optional() private readonly organization?: OperationsOrganizationService) {}
+
+  async subjectForUser(role?: string, userId?: number): Promise<AuthorizationSubject> {
+    const subject: AuthorizationSubject = { role, userId };
+    if (role !== "OPERATION" || !userId || !this.organization) return subject;
+    const membership = await this.organization.getActiveMembership(userId);
+    if (membership) {
+      subject.membershipRole = membership.memberRole as "MEMBER" | "GROUP_LEADER";
+      subject.groupId = membership.groupId;
+    }
+    return subject;
+  }
   /**
    * The one authoritative operations data-scope resolver. It is intentionally
    * pure so Phase 2 tests can compare it with legacy role behavior without
@@ -100,6 +113,9 @@ export class TaskVisibilityService {
   hasCapability(subject: AuthorizationSubject, capability: Capability): boolean {
     const role = subject.role || "";
     if (this.isAdmin(role)) return true;
+    // Contract-only in Phase 4: no production request resolves persisted
+    // membership into this subject, so this cannot alter a real approval queue.
+    if (role === "OPERATION" && subject.membershipRole === "GROUP_LEADER" && capability === "TASK_APPROVE") return true;
     const capabilities: Record<string, Capability[]> = {
       OPERATION: [
         "TASK_VIEW", "TASK_CREATE", "TASK_EDIT", "TASK_DELETE", "TASK_SUBMIT",
@@ -109,7 +125,7 @@ export class TaskVisibilityService {
       OPERATION_MANAGER: [
         "TASK_VIEW", "TASK_EDIT", "TASK_APPROVE", "TASK_REJECT", "TASK_ROLLBACK",
         "ATTACHMENT_VIEW", "IMAGE_TASK_VIEW", "DASHBOARD_VIEW", "STATISTICS_VIEW",
-        "WEEKLY_PLAN_VIEW", "WEEKLY_PLAN_EDIT", "FEEDBACK_VIEW", "FEEDBACK_SUBMIT",
+        "WEEKLY_PLAN_VIEW", "WEEKLY_PLAN_EDIT", "FEEDBACK_VIEW", "FEEDBACK_SUBMIT", "ORG_VIEW",
       ],
       DESIGN_MANAGER: [
         "TASK_VIEW", "IMAGE_TASK_VIEW", "IMAGE_TASK_EDIT", "DASHBOARD_VIEW",
@@ -123,20 +139,62 @@ export class TaskVisibilityService {
     return capabilities[role]?.includes(capability) || false;
   }
 
-  /** Builds the current legacy task filter. GROUP deliberately has no runtime
-   * branch until a persisted group snapshot exists in Phase 3/4. */
   buildTaskVisibilityWhere(subject: AuthorizationSubject) {
+    const activeWhere: any = { deletedAt: null };
+    const scope = this.resolveDataScope(subject);
+    if (scope.type === "GLOBAL_ADMIN") return activeWhere;
+    if (scope.type === "ALL_OPERATIONS") {
+      return {
+        AND: [activeWhere, { OR: [
+          // New organization decrees are globally inspectable by the operations
+          // manager regardless of workflow state. This does not grant TASK_EDIT.
+          { operationGroupSnapshotId: { not: null } },
+          // Keep the legacy visibility contract intact instead of widening old
+          // unscoped drafts merely because GROUP authorization is now enabled.
+          {
+            operationGroupSnapshotId: null,
+            operationMembershipSnapshotId: null,
+            operationSnapshotAt: null,
+            workflowStatus: { in: OPERATION_MANAGER_VISIBLE_STATUSES },
+          },
+        ] }],
+      };
+    }
+    if (scope.type === "GROUP") {
+      return {
+        AND: [activeWhere, { OR: [
+          { operationGroupSnapshotId: scope.groupId },
+          // A leader retains only their pre-organization SELF compatibility;
+          // unscoped decrees never become group data by current membership.
+          { creatorId: subject.userId, operationGroupSnapshotId: null, operationMembershipSnapshotId: null, operationSnapshotAt: null },
+        ] }],
+      };
+    }
     return this.visibleWhere(subject.role, subject.userId);
   }
 
+  /** Phase 4 shadow-only query; it is deliberately not wired into visibleWhere. */
+  shadowGroupSnapshotWhere(groupId: number) {
+    return { deletedAt: null, operationGroupSnapshotId: groupId };
+  }
+
   /** Legacy-compatible task read decision for direct-record callers. */
-  canAccessTask(subject: AuthorizationSubject, task: { creatorId: number; workflowStatus: string; imageTasks?: Array<{ designerId?: number | null }> }): boolean {
+  canAccessTask(subject: AuthorizationSubject, task: { creatorId: number; workflowStatus: string; operationGroupSnapshotId?: number | null; operationMembershipSnapshotId?: number | null; operationSnapshotAt?: Date | null; imageTasks?: Array<{ designerId?: number | null }> }): boolean {
     const role = subject.role || "";
     const userId = subject.userId;
     if (!this.hasCapability(subject, "TASK_VIEW")) return false;
     if (this.isAdmin(role)) return true;
-    if (role === "OPERATION") return task.creatorId === userId;
-    if (role === "OPERATION_MANAGER") return task.workflowStatus !== "DRAFT" || task.creatorId === userId;
+    if (role === "OPERATION") {
+      const scope = this.resolveDataScope(subject);
+      if (scope.type !== "GROUP") return task.creatorId === userId;
+      return task.operationGroupSnapshotId === scope.groupId
+        || (task.creatorId === userId && !task.operationGroupSnapshotId && !task.operationMembershipSnapshotId && !task.operationSnapshotAt);
+    }
+    if (role === "OPERATION_MANAGER") {
+      return Boolean(task.operationGroupSnapshotId)
+        || task.workflowStatus !== "DRAFT"
+        || task.creatorId === userId;
+    }
     if (role === "DESIGN_MANAGER") return DESIGN_VISIBLE_STATUSES.includes(task.workflowStatus);
     if (role === "DESIGNER") return DESIGN_VISIBLE_STATUSES.includes(task.workflowStatus)
       && Boolean(task.imageTasks?.some((item) => item.designerId === userId));
@@ -148,9 +206,7 @@ export class TaskVisibilityService {
     const role = subject.role || "";
     if (!this.hasCapability(subject, "TASK_EDIT")) return false;
     if (role === "OPERATION") return task.creatorId === subject.userId && ["DRAFT", "OPS_REJECTED"].includes(task.workflowStatus);
-    // This mirrors the current PATCH /tasks/:id behavior exactly. Phase 4 will
-    // replace this compatibility branch with explicit policy grants.
-    return role === "OPERATION_MANAGER" || this.isAdmin(role);
+    return this.isAdmin(role);
   }
 
   canApproveTask(subject: AuthorizationSubject, task: { workflowStatus: string }): boolean {
@@ -226,8 +282,8 @@ export class TaskVisibilityService {
     };
   }
 
-  scopeWhere(scope: string, role?: string, userId?: number) {
-    const visible = this.visibleWhere(role, userId);
+  scopeWhere(scope: string, role?: string, userId?: number, subject?: AuthorizationSubject) {
+    const visible = subject ? this.buildTaskVisibilityWhere(subject) : this.visibleWhere(role, userId);
     if (scope === "all") return visible;
     if (role === "OPERATION") {
       if (scope === "returned-for-supplement") return { AND: [visible, { workflowStatus: "OPS_REJECTED" }] };

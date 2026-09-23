@@ -111,7 +111,7 @@ export default function OperatorDashboard({ user, roleData, loading, error, onRe
       <header className={styles.header}>
         <div>
           <h1>运营工作台</h1>
-          <p>{user?.displayName || user?.username || '运营'} · 当前角色：运营</p>
+          <p>{user?.displayName || user?.username || '运营'} · 当前身份：{user?.organizationIdentity === 'GROUP_LEADER' ? '运营组长' : '普通运营'}</p>
           <span>{week?.weekStart && week?.displayWeekEnd ? `${week.weekStart}—${week.displayWeekEnd}` : '周数据暂时无法加载'} · 跟进我提交的法旨与设计进度</span>
         </div>
         <div className={styles.headerTools}>
