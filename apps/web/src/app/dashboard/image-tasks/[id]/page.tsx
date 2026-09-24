@@ -8,7 +8,7 @@ import { attachmentApi, authApi, getErrorMessage, imageTaskApi, type ImageTaskDe
 import { formatShanghaiDateTime } from '@/lib/shanghai-week';
 import { useDashboardRefresh } from '@/hooks/useDashboardRefresh';
 import { useAttachmentImages } from '@/hooks/useAttachmentImages';
-import { returnToPreviousDashboardPage } from '@/lib/dashboard-navigation';
+import { isPermittedTaskListPath, resolveImageTaskListReturnPath, returnToPreviousDashboardPage } from '@/lib/dashboard-navigation';
 import { DetailSection, SecondaryEmptyState, SecondaryErrorState, SecondaryPageHeader, SecondaryPageShell, SecondaryStatusTag } from '@/components/secondary-page';
 import styles from './page.module.css';
 
@@ -152,11 +152,9 @@ export default function ImageTaskDetailPage() {
   }, [errorStatus, loadDetail]);
   useDashboardRefresh({ refreshCore });
 
-  const returnPath = (() => {
-    const requestedPath = searchParams.get('returnTo');
-    if (requestedPath?.startsWith('/dashboard/')) return requestedPath;
-    return detail ? `/dashboard/fazhi/${detail.decree.id}` : '/dashboard/fazhi';
-  })();
+  const requestedReturnTo = searchParams.get('returnTo');
+  const isPermittedReturnTo = isPermittedTaskListPath(requestedReturnTo, currentUser?.role);
+  const returnPath = resolveImageTaskListReturnPath(requestedReturnTo, currentUser?.role);
 
   const downloadAttachment = async (attachment: ImageTaskDetailAttachment) => {
     try {
@@ -377,7 +375,7 @@ export default function ImageTaskDetailPage() {
         title={detail.name || `图片任务 #${detail.imageIndex}`}
         subtitle={`所属法旨 ${detail.decree.serialNumber || '-'}`}
         meta={<div className={styles.headerMeta}><SecondaryStatusTag status={detail.status} />{hasMeaningfulValue(detail.people.designer?.displayName) && <span>设计师：{detail.people.designer?.displayName}</span>}<span>最近更新：{formatShanghaiDateTime(detail.updatedAt) || '-'}</span></div>}
-        actions={[{ key: 'back', label: '返回', icon: <ArrowLeftOutlined />, onClick: () => returnToPreviousDashboardPage(router, returnPath, searchParams.get('returnTo') || undefined) }]}
+        actions={[{ key: 'back', label: '返回', icon: <ArrowLeftOutlined />, onClick: () => returnToPreviousDashboardPage(router, returnPath, isPermittedReturnTo ? requestedReturnTo || undefined : undefined) }]}
       />
 
       {error ? <div className={styles.refreshWarning}><Text type="warning">{error}，当前展示上一次成功加载的数据。</Text></div> : null}

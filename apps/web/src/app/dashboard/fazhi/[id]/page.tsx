@@ -1236,7 +1236,10 @@ export default function FazhiDetailPage() {
                       <Tag color={imageStatusColors[row.status]}>{imageStatusLabels[row.status] || row.status}</Tag>
                     </Space>
                   }
-                  extra={<Space size={6}><Button size="small" onClick={() => router.push(`/dashboard/image-tasks/${row.id}?returnTo=${encodeURIComponent(`/dashboard/fazhi/${task.id}`)}`)}>查看详情</Button><Button size="small" type={row.id === selectedImageTaskId ? "primary" : "default"} onClick={() => openImageTaskWorkbench(row)}>进入工作台</Button></Space>}
+                  extra={<Space size={6}><Button size="small" onClick={() => {
+                    const listReturnTo = searchParams.get("returnTo");
+                    router.push(`/dashboard/image-tasks/${row.id}${listReturnTo ? `?returnTo=${encodeURIComponent(listReturnTo)}` : ""}`);
+                  }}>查看详情</Button><Button size="small" type={row.id === selectedImageTaskId ? "primary" : "default"} onClick={() => openImageTaskWorkbench(row)}>进入工作台</Button></Space>}
                 >
                   <Row gutter={[16, 12]} align="middle">
                     <Col xs={24} md={5}>
