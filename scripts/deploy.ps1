@@ -1,10 +1,12 @@
-param([Parameter(Mandatory=$true)][string]$Release,[switch]$FinalizeRunningRelease,[switch]$EnsureWatchdog,[switch]$RecoverRunningRelease)
+param([Parameter(Mandatory=$true)][string]$Release,[string]$ExpectedOrgPermissionMode,[switch]$ValidateOrgPermissionModeOnly,[switch]$FinalizeRunningRelease,[switch]$EnsureWatchdog,[switch]$RecoverRunningRelease)
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'release-common.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'deployment-org-mode.psm1') -Force
 $releaseRoot=(Resolve-Path (Get-TianjiReleasePath $Release)).Path
 $evidence=New-TianjiDeploymentEvidence $Release;$log=Join-Path $evidence.Path 'deploy.stdout.log';$err=Join-Path $evidence.Path 'deploy.stderr.log'
 function Invoke-Logged { param([scriptblock]$Command) & $Command 1>>$log 2>>$err;if($LASTEXITCODE -ne 0){throw "Command failed: $LASTEXITCODE"} }
+$expectedOrgMode=$null
 $oldRuntime=$null;$oldReleaseRoot=$null;$oldStopped=$false;$newStartAttempted=$false;$formalEnvironment=$null
 function Get-FormalEnvironmentValue {
   param([Parameter(Mandatory=$true)][string]$Name)
@@ -43,9 +45,53 @@ function Get-FormalLifecycleEnvironment {
     ORG_PERMISSION_ENFORCEMENT=(Get-FormalEnvironmentValue 'ORG_PERMISSION_ENFORCEMENT')
   }
   foreach($name in @('JWT_SECRET','ALLOWED_ORIGINS','NODE_ENV','ORG_PERMISSION_ENFORCEMENT')){if(-not $values[$name]){throw "DEPLOY_BLOCKED`nFormal $name is missing from production configuration."}}
-  if($values.ORG_PERMISSION_ENFORCEMENT.Trim().ToLowerInvariant() -ne 'compatibility'){throw "DEPLOY_BLOCKED`nFormal ORG_PERMISSION_ENFORCEMENT must be compatibility for this release."}
-  Write-Host "DEPLOY_ENV_DIAGNOSTIC TIANJI_DATA_ROOT=present resolved=$dataRoot classification=formal"
+  $values.ORG_PERMISSION_ENFORCEMENT=Assert-TianjiExpectedOrgPermissionMode -ConfiguredOrgPermissionMode $values.ORG_PERMISSION_ENFORCEMENT -ExpectedOrgPermissionMode $expectedOrgMode
+  Write-Host "DEPLOY_ENV_DIAGNOSTIC TIANJI_DATA_ROOT=present resolved=$dataRoot classification=formal orgPermissionMode=$($values.ORG_PERMISSION_ENFORCEMENT)"
   [pscustomobject]@{DataRoot=$dataRoot;DatabasePath=$databasePath;Values=$values}
+}
+
+function Assert-FormalRuntimeOrgPermissionMode {
+  if(-not $formalEnvironment){throw 'DEPLOY_INCOMPLETE: formal lifecycle environment was not initialized.'}
+  $previous=@{}
+  try {
+    $runtimeEnvironment=[ordered]@{
+      DATABASE_URL=$formalEnvironment.Values.DATABASE_URL
+      JWT_SECRET=$formalEnvironment.Values.JWT_SECRET
+      TIANJI_RUNTIME_PRISMA_CLIENT=(Join-Path $releaseRoot 'node_modules\\@prisma\\client')
+      TIANJI_RUNTIME_JSONWEBTOKEN=(Join-Path $releaseRoot 'node_modules\\jsonwebtoken')
+    }
+    foreach($entry in $runtimeEnvironment.GetEnumerator()){
+      $previous[$entry.Key]=[Environment]::GetEnvironmentVariable($entry.Key,'Process')
+      [Environment]::SetEnvironmentVariable($entry.Key,$entry.Value,'Process')
+    }
+    $runtimeMode=& node.exe -e @'
+const { PrismaClient } = require(process.env.TIANJI_RUNTIME_PRISMA_CLIENT);
+const jwt = require(process.env.TIANJI_RUNTIME_JSONWEBTOKEN);
+(async () => {
+  const prisma = new PrismaClient();
+  try {
+    const user = await prisma.user.findFirst({ where: { isActive: true, role: { name: { in: ['OWNER', 'SUPER_ADMIN'] } } }, select: { id: true } });
+    if (!user) throw new Error('No active OWNER or SUPER_ADMIN is available for the runtime mode verification.');
+    const token = jwt.sign({ sub: user.id, username: 'deployment-runtime-check', role: 'OWNER' }, process.env.JWT_SECRET, { expiresIn: '60s' });
+    const response = await fetch('http://127.0.0.1:3001/api/operations-organization/readiness', { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Runtime readiness endpoint returned HTTP ${response.status}.`);
+    const body = await response.json();
+    const mode = body?.data?.mode;
+    if (typeof mode !== 'string') throw new Error('Runtime readiness endpoint did not return data.mode.');
+    process.stdout.write(mode.trim().toLowerCase());
+  } finally {
+    await prisma.$disconnect();
+  }
+})().catch((error) => { console.error(error.stack || error.message); process.exit(1); });
+'@
+    if($LASTEXITCODE -ne 0){throw 'Runtime organization permission mode API query failed.'}
+    $actual=Resolve-TianjiConfiguredOrgPermissionMode $runtimeMode
+    if($actual -ne $expectedOrgMode){throw "DEPLOY_INCOMPLETE`nRuntime ORG_PERMISSION_ENFORCEMENT '$actual' does not match ExpectedOrgPermissionMode '$expectedOrgMode'."}
+    Write-TianjiDeploymentEvent $evidence.Path 'runtime-org-permission-mode-verified' @{expected=$expectedOrgMode;actual=$actual;source='GET /api/operations-organization/readiness'}
+    return $actual
+  } finally {
+    foreach($entry in $previous.GetEnumerator()){[Environment]::SetEnvironmentVariable($entry.Key,$entry.Value,'Process')}
+  }
 }
 function Invoke-FormalLifecycleScript {
   param([Parameter(Mandatory=$true)][string]$ScriptPath,[string[]]$Arguments=@())
@@ -83,7 +129,17 @@ function Restore-PreviousRelease {
   if (-not(Wait-TianjiHttp200 'http://127.0.0.1:3001/api/health' 45) -or -not(Wait-TianjiHttp200 'http://127.0.0.1:3000/login' 75)) { throw 'Automatic rollback failed to restore the previous release.' }
 }
 try {
+  $expectedOrgMode=Resolve-TianjiExpectedOrgPermissionMode $ExpectedOrgPermissionMode
   $manifest=Assert-TianjiRelease $Release
+  if($ValidateOrgPermissionModeOnly){
+    $runtimeStatePath='D:\TianjiData\logs\runtime-state.json'
+    if(-not(Test-Path -LiteralPath $runtimeStatePath)){throw "DEPLOY_BLOCKED`nFormal runtime-state is missing."}
+    $formalEnvironment=Get-FormalLifecycleEnvironment -RuntimeStatePath $runtimeStatePath
+    Write-TianjiDeploymentEvent $evidence.Path 'formal-org-permission-mode-validated' @{expected=$expectedOrgMode;actual=$formalEnvironment.Values.ORG_PERMISSION_ENFORCEMENT}
+    [ordered]@{deploymentId=$evidence.Id;release=$Release;status='VALIDATED';expectedOrgPermissionMode=$expectedOrgMode;actualOrgPermissionMode=$formalEnvironment.Values.ORG_PERMISSION_ENFORCEMENT;completedAt=(Get-Date).ToUniversalTime().ToString('o')}|ConvertTo-Json|Set-Content (Join-Path $evidence.Path 'deployment.json') -Encoding utf8
+    Write-Host 'ORG_PERMISSION_MODE_VALIDATED'
+    return
+  }
   if($FinalizeRunningRelease -or $EnsureWatchdog -or $RecoverRunningRelease){
     $runtimeStatePath='D:\TianjiData\logs\runtime-state.json'
     if(-not(Test-Path -LiteralPath $runtimeStatePath)){throw "DEPLOY_INCOMPLETE`nFormal runtime-state is missing."}
@@ -95,6 +151,7 @@ try {
       Invoke-FormalLifecycleScript -ScriptPath (Join-Path $releaseRoot 'scripts\start-tianji.ps1') -Arguments @('-NoBrowser') 1>>$log 2>>$err
     }
     if(-not(Wait-TianjiHttp200 'http://127.0.0.1:3001/api/health' 45) -or -not(Wait-TianjiHttp200 'http://127.0.0.1:3000/login' 75)){throw 'DEPLOY_INCOMPLETE`nRunning release health check failed.'}
+    Assert-FormalRuntimeOrgPermissionMode | Out-Null
     if($EnsureWatchdog -and -not(Wait-FormalWatchdog -RuntimeStatePath $runtimeStatePath -ExpectedRoot $releaseRoot -TimeoutSeconds 1)){
       Invoke-FormalLifecycleScript -ScriptPath (Join-Path $releaseRoot 'scripts\start-tianji.ps1') -Arguments @('-NoBrowser') 1>>$log 2>>$err
     }
@@ -130,6 +187,7 @@ try {
   Invoke-FormalLifecycleScript -ScriptPath (Join-Path $releaseRoot 'scripts\start-tianji.ps1') -Arguments @('-NoBrowser') 1>>$log 2>>$err
   if(-not(Wait-TianjiHttp200 'http://127.0.0.1:3001/api/health' 45)){throw 'Backend health check failed'}
   if(-not(Wait-TianjiHttp200 'http://127.0.0.1:3000/login' 75)){throw 'Frontend health check failed'}
+  Assert-FormalRuntimeOrgPermissionMode | Out-Null
   $runtimeState=Get-Content 'D:\TianjiData\logs\runtime-state.json' -Raw|ConvertFrom-Json
   if($runtimeState.projectRoot -ne $releaseRoot){throw "Runtime root is not the selected release: $($runtimeState.projectRoot)"}
   if(-not(Wait-FormalWatchdog -RuntimeStatePath $runtimeStatePath -ExpectedRoot $releaseRoot)){throw 'DEPLOY_INCOMPLETE`nFormal watchdog failed to start for the selected release.'}
